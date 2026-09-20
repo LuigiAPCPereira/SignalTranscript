@@ -1,12 +1,12 @@
 # PRD — SignalTranscript / MVP v0.1
 
-**Situação:** planejamento proposto em 2026-09-20; nenhum requisito implementado. Fonte das decisões: conversa do usuário; [README](README.md). [Inventário](TASKLIST.md) e [arquitetura](DESIGN.md).
+**Situação:** planejamento proposto em 2026-09-20; não há aplicativo funcional. Fonte das decisões: conversa do usuário; [README](README.md). [Inventário](TASKLIST.md) e [arquitetura](DESIGN.md).
 
 ## Problema, público, jornada e limites
 
 Público inicial: pessoa que quer absorver conhecimento de vídeos de **qualquer tema** sem assistir integralmente a cada um. Jornada: informar URL do YouTube ou importar transcrição/áudio autorizado → acompanhar processamento → ler síntese e ideias → consultar trechos originais e pesquisar biblioteca.
 
-Confirmado pelo usuário: caráter generalista, Python + FastAPI no backend e Whisper Large V3 Turbo pela Groq. React/TypeScript, SQLite, yt-dlp, GPT-OSS 120B e worker local são propostas; não afirmar implantação nem aceitação individual desses detalhes.
+Confirmado pelo usuário: caráter generalista, Python + FastAPI no backend, Whisper Large V3 Turbo pela Groq como integração inicial e **independência futura de provedores de IA**. React/TypeScript, SQLite, yt-dlp, GPT-OSS 120B e worker local são propostas; não afirmar implantação nem aceitação individual desses detalhes. [Decisão de independência](docs/adr/ADR-002-provider-independence.md).
 
 ## Requisitos e aceites
 
@@ -24,10 +24,11 @@ Confirmado pelo usuário: caráter generalista, Python + FastAPI no backend e Wh
 | REQ-010 | Progressão e falhas | UI mostra estados, erros úteis e cancelamento cooperativo sem declarar interrupção remota não confirmada. |
 | REQ-011 | Segurança e limites | Chaves só no backend; entradas, temporários, duração, concorrência, URLs e logs tratados com limites e validações. |
 | REQ-012 | Leitura e busca | Buscar transcrição, ler síntese e abrir trecho apenas quando existir timestamp efetivo. |
+| REQ-013 | Independência de provedores | Transcrição e análise são portas distintas com resultados internos canônicos; seleção por função é independente e validada; um provedor não registrado falha explicitamente, sem fallback/custo ou envio a outro serviço silencioso. Importação de transcrição não exige STT. Substituição é demonstrável com fakes; adaptadores NIM/local exigem validação própria antes de serem anunciados. |
 
 ## MVP e exclusões
 
-Inclui um vídeo por vez, importações, aquisição por URL quando permitida, transcrição em segmentos, síntese, biblioteca local e pesquisa textual. Exclui chat entre vídeos, busca vetorial, leitura visual de slides, multiusuário, processamento em massa, deploy na nuvem, custos extras sem autorização e verificação factual externa automática.
+Inclui um vídeo por vez, importações, aquisição por URL quando permitida, transcrição em segmentos, síntese, biblioteca local e pesquisa textual. Inclui contratos neutros para os dois serviços de IA, mas **não** exige dois provedores reais nesta fase. Exclui chat entre vídeos, busca vetorial, leitura visual de slides, multiusuário, processamento em massa, deploy na nuvem, custos extras sem autorização e verificação factual externa automática.
 
 O resumo descreve o conteúdo, não comprova a veracidade. Alegações não verificadas externamente devem continuar identificadas como tal. A transcrição é dado externo não confiável, não uma instrução para executar.
 
@@ -36,7 +37,7 @@ O resumo descreve o conteúdo, não comprova a veracidade. Alegações não veri
 - Downloads/acesso automatizado dependem de permissões e termos aplicáveis; não implementar contorno de restrições. `captions.download` oficial exige acesso de edição no vídeo; importação alternativa é essencial.
 - Groq documenta limite de upload direto de 25 MB no plano gratuito; **limites efetivos da conta não foram verificados**. Obedecer `retry-after` em 429, sem repetição infinita em acesso negado.
 - Timestamps ausentes permanecem `null`; não oferecer deep link simulado. Legenda e áudio podem divergir: armazenar idioma e proveniência para deduplicação correta.
-- Pendentes: permissões de vídeos reais, idioma padrão da síntese, política de retenção/backup, cota e faturamento, verificação semântica das referências.
+- Pendentes: permissões de vídeos reais, idioma padrão da síntese, política de retenção/backup, cota e faturamento, verificação semântica das referências, integração operacional de adaptadores e configuração por função.
 
 ## Fontes técnicas consultadas (20/09/2026)
 

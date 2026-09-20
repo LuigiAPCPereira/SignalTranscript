@@ -1,24 +1,23 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20. **Escopo:** MVP v0.1 em planejamento. **Autoridades locais:** [PRD](PRD.md), [DESIGN](DESIGN.md), [TASKLIST](TASKLIST.md), [ROADMAP](ROADMAP.md), [AGENTS](AGENTS.md).
+**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, documentação e contratos parciais. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
 
-## Git / integração
+## Git e decisões
 
-- Repo: https://github.com/LuigiAPCPereira/SignalTranscript; acesso de escrita via conector confirmado.
-- Base `main` verificada: `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; só README original no inventário inicial.
-- Branch `docs/mvp-architecture-v0.1`; primeiro commit documental reaberto `403a8b2d1e4e2f26e6a1af76e8031c53211ec240` (dez arquivos). [PR #1](https://github.com/LuigiAPCPereira/SignalTranscript/pull/1) aberto em modo draft, sem merge confirmado na consulta. Revalidar HEAD da branch após atualizações de documentos, evitando SHA autorreferencial.
-- Worktree local Git: não inspecionada; o acesso verificado foi ao repositório remoto.
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` previamente observada `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; revalidar antes de integrar.
+- PR #1: `docs/mvp-architecture-v0.1` em draft, base do PR #2; último HEAD observado `11f893e5d2cb1cf1ef663b4d838f34cbc9152a2f`.
+- PR #2: `feat/t003-groq-contract-offline`, empilhado sobre PR #1, recebeu fatia de T-010 além de T-003. HEAD final deste arquivo deve ser confrontado com GitHub depois do commit; não presumir CI, merge ou estado da `main` por este texto.
+- Decidido pelo usuário: produto generalista, Python + FastAPI, Groq Whisper Large V3 Turbo como integração inicial e independência futura de provedores. GPT-OSS 120B, NIM/local como implementações, React/TS, SQLite, yt-dlp e worker têm graus diferentes de proposta/pendência conforme [PRD](PRD.md) e [ADR-002](docs/adr/ADR-002-provider-independence.md).
 
-## Decisões e protocolo
+## Protocolo e cobertura
 
-- Confirmado pelo usuário: produto generalista, Python + FastAPI, Whisper Large V3 Turbo pela Groq. React/TS, SQLite, yt-dlp condicionado, GPT-OSS 120B e worker são propostas.
-- Snapshot `DOCUMENTATION_AND_CONTINUITY.md` v2.2 lido no Project, mas índice central Notion v2.2 observado em STAGING em 20/09/2026. Fonte editorial aprovada e equivalência integral da cópia não demonstradas. Não presumir acesso via Codex ou execução agendada.
-- [Relatório das nove funções](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**, apesar de documentos criados e reabertos. `main` permanece sem integração dos docs até decisão posterior.
+Índice Notion v2.2 consultado em 2026-09-20: **STAGING**. Fonte canônica editorial aprovada da v2.2, equivalência com a cópia do Project e acesso em Codex/agendamentos não demonstrados. [Relatório](docs/ADOPTION_REPORT.md) mantém **ADOÇÃO PARCIAL**. GitHub remoto foi inspecionado via conector; checkout do repositório nesta sessão não foi obtido (falha de DNS no clone).
 
-## Tarefa ativa, implementação e próxima ação
+## Tarefas e evidências
 
-**T-004** ([TASKLIST](TASKLIST.md)): finalizar reconciliação da versão canônica do protocolo/Project e a revisão documental do PR. T-001 e T-002 têm documentação produzida, lida remotamente e sem teste de produto. T-003: contrato Groq precisa de áudio autorizado e limites de conta reais.
+- **T-004 (checkpoint documental):** nove funções cobertas parcialmente, origem aprovada ainda pendente; não promover STAGING a adotado.
+- **T-003 (parcial):** normalizador Groq offline, oito testes locais aprovados em sessão anterior; sem chamada real, cota, limites, chunk overlap, CI ou E2E.
+- **T-010 (fatia atual):** portas neutras `TranscriptionProvider`/`AnalysisProvider`, modelo de dados, seleção independente sem fallback e referências validadas. Nove testes novos passaram no diretório local isolado; arquivos enviados à branch e precisam de teste sobre checkout/CI. Não há adaptador Groq operacional, NIM/local reais nem configuração persistente.
+- T-005–T-009: sem implementação do produto validada. O PR #2 não demonstra aplicativo funcional.
 
-**Produto/testes:** nenhum backend/frontend criado; Groq/yt-dlp não testados na máquina; CI/E2E/deploy não executados. **Integração:** PR em draft, não mesclado na consulta. **Bloqueios:** protocolo aprovado não comprovado, permissões concretas de vídeo/cotas da conta ainda desconhecidas.
-
-**Próximo bloco verificável:** reabrir os arquivos alterados desta revisão na ref final; conferir PR #1 e `main`, fonte aprovada do protocolo e comparação de versão/hashes quando possível. Não declarar adoção concluída com origem STAGING.
+**Próximo bloco por ID:** T-010 — revisar arquivos publicados e integrar os futuros adaptadores somente pelas portas; T-003 — validar Groq com áudio autorizado e acesso legítimo, sem versionar chaves; T-004 — reconciliar a fonte canônica aprovada quando disponível. Não efetuar merge nem deploy automaticamente.
