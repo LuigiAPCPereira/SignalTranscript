@@ -14,4 +14,4 @@ Separar as portas `TranscriptionProvider` e `AnalysisProvider`, com objetos de d
 - Modelos locais e NVIDIA NIM são **extensões possíveis, não integrações existentes**. Cada adaptador futuro precisa de validação real de contrato, limites, segurança e qualidade, sem herdar suposições da Groq.
 - Não construir framework de plugins, marketplace, abstração para recursos hipotéticos ou fallback automático no MVP.
 
-**Evidência:** decisão explícita do usuário na conversa; implementação parcial em PR próprio T-010; [contrato](../T010_PROVIDER_BOUNDARY.md), [inventário](../../TASKLIST.md), [DESIGN](../../DESIGN.md). Não confundir testes com fakes com testes reais de API, modelos locais ou E2E.
+**Evidência:** decisão explícita do usuário na conversa; contrato inicial desenvolvido como fatia adicional do PR #2, sem integração operacional; [contrato](../T010_PROVIDER_BOUNDARY.md), [inventário](../../TASKLIST.md), [DESIGN](../../DESIGN.md). Não confundir testes com fakes com testes reais de API, modelos locais ou E2E.
