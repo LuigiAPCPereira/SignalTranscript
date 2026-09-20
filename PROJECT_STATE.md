@@ -1,22 +1,23 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, arquitetura em revisão e teste offline limitado. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
+**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, documentação e contratos parciais. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
 
 ## Git e decisões
 
-- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` observada em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`.
-- PR #1: branch `docs/mvp-architecture-v0.1`, HEAD observado `11f893e5d2cb1cf1ef663b4d838f34cbc9152a2f`, aberto em draft, sem merge na consulta.
-- Fatia independente T-003: branch `feat/t003-groq-contract-offline`, derivada do PR #1; revalidar HEAD e PR após publicar. Não presumir integração com a `main` nem execução de CI remoto.
-- Confirmado pelo usuário: produto generalista, Python + FastAPI e Whisper Large V3 Turbo via Groq. Demais partes da stack estão propostas.
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` previamente observada `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; revalidar antes de integrar.
+- PR #1: `docs/mvp-architecture-v0.1` em draft, base do PR #2; último HEAD observado `11f893e5d2cb1cf1ef663b4d838f34cbc9152a2f`.
+- PR #2: `feat/t003-groq-contract-offline`, empilhado sobre PR #1, recebeu fatia de T-010 além de T-003. HEAD final deste arquivo deve ser confrontado com GitHub depois do commit; não presumir CI, merge ou estado da `main` por este texto.
+- Decidido pelo usuário: produto generalista, Python + FastAPI, Groq Whisper Large V3 Turbo como integração inicial e independência futura de provedores. GPT-OSS 120B, NIM/local como implementações, React/TS, SQLite, yt-dlp e worker têm graus diferentes de proposta/pendência conforme [PRD](PRD.md) e [ADR-002](docs/adr/ADR-002-provider-independence.md).
 
 ## Protocolo e cobertura
 
-O índice editorial do protocolo no Notion foi reaberto em 20/09/2026: v2.2 segue **STAGING**; a publicação integral, equivalência com a cópia do Project e acesso por Codex/agendamentos não foram comprovados. [Relatório](docs/ADOPTION_REPORT.md): ADOÇÃO PARCIAL, não concluída. Nenhuma worktree local do repositório foi inspecionada.
+Índice Notion v2.2 consultado em 2026-09-20: **STAGING**. Fonte canônica editorial aprovada da v2.2, equivalência com a cópia do Project e acesso em Codex/agendamentos não demonstrados. [Relatório](docs/ADOPTION_REPORT.md) mantém **ADOÇÃO PARCIAL**. GitHub remoto foi inspecionado via conector; checkout do repositório nesta sessão não foi obtido (falha de DNS no clone).
 
 ## Tarefas e evidências
 
-- **T-004 (checkpoint principal):** revisão documental e origem canônica ainda pendentes. Não duplicar adoção nem promover STAGING.
-- **T-003 (trabalho independente parcial):** validação offline de parâmetros, segmentos, timestamps e offset; 8 testes unitários passaram no ambiente da sessão. Sem chamada Groq real, cota da conta, teste de tamanho, sobreposição, FFmpeg, CI ou testes E2E.
-- T-005–T-009: sem implementação, validação ou integração. A fatia de T-003 não prova o contrato de produção.
+- **T-004 (checkpoint documental):** nove funções cobertas parcialmente, origem aprovada ainda pendente; não promover STAGING a adotado.
+- **T-003 (parcial):** normalizador Groq offline, oito testes locais aprovados em sessão anterior; sem chamada real, cota, limites, chunk overlap, CI ou E2E.
+- **T-010 (fatia atual):** portas neutras `TranscriptionProvider`/`AnalysisProvider`, modelo de dados, seleção independente sem fallback e referências validadas. Nove testes novos passaram no diretório local isolado; arquivos enviados à branch e precisam de teste sobre checkout/CI. Não há adaptador Groq operacional, NIM/local reais nem configuração persistente.
+- T-005–T-009: sem implementação do produto validada. O PR #2 não demonstra aplicativo funcional.
 
-**Próxima ação:** revalidar o PR/HEAD da fatia e os arquivos publicados; manter T-004 bloqueada em sua parte editorial enquanto a release aprovada não estiver comprovada. Para concluir T-003, usar áudio autorizado e chave local, sem publicar credenciais, verificar resposta real, erros/limites e política de sobreposição.
+**Próximo bloco por ID:** T-010 — revisar arquivos publicados e integrar os futuros adaptadores somente pelas portas; T-003 — validar Groq com áudio autorizado e acesso legítimo, sem versionar chaves; T-004 — reconciliar a fonte canônica aprovada quando disponível. Não efetuar merge nem deploy automaticamente.
