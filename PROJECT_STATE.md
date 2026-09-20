@@ -1,24 +1,22 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20. **Escopo:** MVP v0.1 em planejamento. **Autoridades locais:** [PRD](PRD.md), [DESIGN](DESIGN.md), [TASKLIST](TASKLIST.md), [ROADMAP](ROADMAP.md), [AGENTS](AGENTS.md).
+**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, arquitetura em revisão e teste offline limitado. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
 
-## Git / integração
+## Git e decisões
 
-- Repo: https://github.com/LuigiAPCPereira/SignalTranscript; acesso de escrita via conector confirmado.
-- Base `main` verificada: `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; só README original no inventário inicial.
-- Branch `docs/mvp-architecture-v0.1`; primeiro commit documental reaberto `403a8b2d1e4e2f26e6a1af76e8031c53211ec240` (dez arquivos). [PR #1](https://github.com/LuigiAPCPereira/SignalTranscript/pull/1) aberto em modo draft, sem merge confirmado na consulta. Revalidar HEAD da branch após atualizações de documentos, evitando SHA autorreferencial.
-- Worktree local Git: não inspecionada; o acesso verificado foi ao repositório remoto.
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` observada em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`.
+- PR #1: branch `docs/mvp-architecture-v0.1`, HEAD observado `11f893e5d2cb1cf1ef663b4d838f34cbc9152a2f`, aberto em draft, sem merge na consulta.
+- Fatia independente T-003: branch `feat/t003-groq-contract-offline`, derivada do PR #1; revalidar HEAD e PR após publicar. Não presumir integração com a `main` nem execução de CI remoto.
+- Confirmado pelo usuário: produto generalista, Python + FastAPI e Whisper Large V3 Turbo via Groq. Demais partes da stack estão propostas.
 
-## Decisões e protocolo
+## Protocolo e cobertura
 
-- Confirmado pelo usuário: produto generalista, Python + FastAPI, Whisper Large V3 Turbo pela Groq. React/TS, SQLite, yt-dlp condicionado, GPT-OSS 120B e worker são propostas.
-- Snapshot `DOCUMENTATION_AND_CONTINUITY.md` v2.2 lido no Project, mas índice central Notion v2.2 observado em STAGING em 20/09/2026. Fonte editorial aprovada e equivalência integral da cópia não demonstradas. Não presumir acesso via Codex ou execução agendada.
-- [Relatório das nove funções](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**, apesar de documentos criados e reabertos. `main` permanece sem integração dos docs até decisão posterior.
+O índice editorial do protocolo no Notion foi reaberto em 20/09/2026: v2.2 segue **STAGING**; a publicação integral, equivalência com a cópia do Project e acesso por Codex/agendamentos não foram comprovados. [Relatório](docs/ADOPTION_REPORT.md): ADOÇÃO PARCIAL, não concluída. Nenhuma worktree local do repositório foi inspecionada.
 
-## Tarefa ativa, implementação e próxima ação
+## Tarefas e evidências
 
-**T-004** ([TASKLIST](TASKLIST.md)): finalizar reconciliação da versão canônica do protocolo/Project e a revisão documental do PR. T-001 e T-002 têm documentação produzida, lida remotamente e sem teste de produto. T-003: contrato Groq precisa de áudio autorizado e limites de conta reais.
+- **T-004 (checkpoint principal):** revisão documental e origem canônica ainda pendentes. Não duplicar adoção nem promover STAGING.
+- **T-003 (trabalho independente parcial):** validação offline de parâmetros, segmentos, timestamps e offset; 8 testes unitários passaram no ambiente da sessão. Sem chamada Groq real, cota da conta, teste de tamanho, sobreposição, FFmpeg, CI ou testes E2E.
+- T-005–T-009: sem implementação, validação ou integração. A fatia de T-003 não prova o contrato de produção.
 
-**Produto/testes:** nenhum backend/frontend criado; Groq/yt-dlp não testados na máquina; CI/E2E/deploy não executados. **Integração:** PR em draft, não mesclado na consulta. **Bloqueios:** protocolo aprovado não comprovado, permissões concretas de vídeo/cotas da conta ainda desconhecidas.
-
-**Próximo bloco verificável:** reabrir os arquivos alterados desta revisão na ref final; conferir PR #1 e `main`, fonte aprovada do protocolo e comparação de versão/hashes quando possível. Não declarar adoção concluída com origem STAGING.
+**Próxima ação:** revalidar o PR/HEAD da fatia e os arquivos publicados; manter T-004 bloqueada em sua parte editorial enquanto a release aprovada não estiver comprovada. Para concluir T-003, usar áudio autorizado e chave local, sem publicar credenciais, verificar resposta real, erros/limites e política de sobreposição.
