@@ -14,4 +14,4 @@ class ProviderFailure(Exception):
     status_code: int | None = None
 
     def __str__(self) -> str:
-        return f"transcription provider failed: {self.code}"
+        return f"provider failed: {self.code}"
