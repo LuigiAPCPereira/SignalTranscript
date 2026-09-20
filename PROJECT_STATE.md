@@ -1,23 +1,24 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, documentação e contratos parciais. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
+**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, desenvolvimento incremental com contratos e adaptadores offline; aplicação E2E ausente. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
 
 ## Git e decisões
 
-- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` previamente observada `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; revalidar antes de integrar.
-- PR #1: branch `docs/mvp-architecture-v0.1` em draft. PR #2: `feat/t003-groq-contract-offline`, empilhado sobre #1, último HEAD confirmado antes desta fatia `457112a31d92af68f36fb6bcd9c53b8c9cc0dfae`.
-- Fatia atual: branch `feat/t003-groq-stt-adapter`, derivada do HEAD do PR #2 citado. PR e HEAD final devem ser verificados no GitHub após publicação; não presumir CI, merge ou trabalho em worktree local do repositório.
-- Decidido pelo usuário: produto generalista, Python + FastAPI, Groq Whisper Large V3 Turbo como integração inicial e independência futura de provedores. GPT-OSS 120B, NIM/local como implementações, React/TS, SQLite, yt-dlp e worker têm graus diferentes de proposta/pendência conforme [PRD](PRD.md) e [ADR-002](docs/adr/ADR-002-provider-independence.md).
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. `main` observada anteriormente em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`, revalidar antes de qualquer integração.
+- Cadeia de revisão: PR #1 `docs/mvp-architecture-v0.1` (documentação); PR #2 `feat/t003-groq-contract-offline` (portas/normalização); PR #3 `feat/t003-groq-stt-adapter` (STT). Todos observados como Drafts, não mesclados, na recuperação desta fatia.
+- **Fatia atual:** branch `feat/t010-groq-analysis-adapter`, derivada do PR #3 HEAD `8bec26d46ad2c27ba8319b53f6fb3402c9dab3a8`. Revalidar HEAD/PR na conclusão da publicação; sem merge ou deploy nesta sessão.
+- Decisões do usuário: produto generalista, backend Python + FastAPI, Groq Whisper Turbo como integração inicial e independência entre provedores STT/LLM. GPT-OSS 120B permanece modelo proposto de análise com adaptador técnico offline; NIM/local não integrados.
 
 ## Protocolo e cobertura
 
-Índice Notion v2.2 consultado em 2026-09-20: **STAGING**. Fonte canônica editorial aprovada da v2.2, equivalência com a cópia do Project e acesso em Codex/agendamentos não demonstrados. [Relatório](docs/ADOPTION_REPORT.md) mantém **ADOÇÃO PARCIAL**. Conector GitHub inspecionado; testes foram executados em cópia isolada dos arquivos (hash Git dos arquivos base confrontado), não em checkout remoto autenticado nem CI.
+Notion v2.2 reaberto em 2026-09-20: **STAGING**. Versão canônica APPROVED/PUBLISHED, igualdade integral à cópia do Project e disponibilidade em Codex/agendamentos não certificadas. [ADOPTION_REPORT](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**. A branch remota foi consultada por GitHub; nenhum checkout Git do repositório foi obtido neste ambiente (DNS indisponível). Não inferir worktree.
 
-## Tarefas e evidências
+## Tarefas e evidência
 
-- **T-004 (checkpoint documental):** nove funções documentadas com lacunas de fonte aprovada; não promover STAGING a adotado.
-- **T-003 (fatia atual parcial):** normalizador offline e adaptador `AsyncGroq` por injeção; arquivo checado antes de enviar, sem retry automático de SDK, falhas tipadas, resposta convertida para `Transcript`. Testes locais completos da cópia: 31 `unittest` aprovados (8 do normalizador, 9 das portas e 14 do adaptador); `compileall` passou. Nenhuma chamada Groq, SDK real, teste de áudio/codec, cota efetiva, chunk overlap, CI ou E2E. Detalhes em [nota T-003](docs/T003_GROQ_ADAPTER.md).
-- **T-010 (parcial):** portas e seleção independentes existentes; adaptador de transcrição Groq integra a porta em testes com fake, mas `AnalysisProvider` real, configuração persistente, NIM e local não existem.
-- T-005–T-009: sem implementação do aplicativo validada; PRs em draft não significam integração.
+- **T-004 (checkpoint documental):** cobertura das nove funções na branch, mas fonte editorial aprovada e integração na `main` pendentes. Não anunciar adoção concluída.
+- **T-003 (parcial):** normalizador/adapter Groq STT offline existentes. Classificador de erros extraído para módulo Groq compartilhado sem alterar interface neutra. Sem chamada real, áudio, limite de conta, chunk overlap ou validação CI.
+- **T-010 (fatia atual parcial):** portas/seleção independentes, Groq STT e `GroqAnalysisAdapter` offline; JSON Schema estrito, entrada limitada sem truncamento, rejeição de referências inexistentes, respostas incompletas e recusas, falhas tipadas. **47 testes locais passaram** na cópia de arquivos Git blob correspondentes (31 anteriores, 16 de análise); `compileall` passou. Sem SDK instalado, chave, modelo remoto, NIM/local, configuração persistida, CI ou E2E. [Nota técnica](docs/T010_GROQ_ANALYSIS.md).
+- **T-007:** pipeline de análise completa pendente: segmentação de vídeos longos, consolidação, versões/persistência, qualidade e evidência de início/meio/fim. A existência do adaptador não conclui esta tarefa.
+- T-005, T-006, T-008, T-009: pendentes conforme [TASKLIST](TASKLIST.md).
 
-**Próximo bloco por ID:** T-003 — conferir HEAD/PR da fatia e realizar validação do SDK e API com áudio autorizado, chave somente no ambiente, limites reais e bordas de chunk; T-010 — implementar análise pela porta neutra depois; T-004 — verificar fonte aprovada quando disponível. Não efetuar merge ou deploy automaticamente.
+**Próxima ação executável:** revalidar HEAD/PR desta branch e arquivos publicados; para T-010/T-003, exercitar contratos reais Groq somente em ambiente seguro com conteúdo autorizado e chave local. Em T-007, implementar chunking e consolidar sem perder referências; T-004 continua com bloqueio editorial declarado. Não efetuar merge ou deploy automaticamente.
