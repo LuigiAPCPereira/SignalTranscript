@@ -1,0 +1,17 @@
+# T-005 — API local e worker recuperável: primeira fatia
+
+**Estado:** implementação parcial em `feat/t005-local-job-api`, [PR #7](https://github.com/LuigiAPCPereira/SignalTranscript/pull/7), empilhado sobre #6. [TASKLIST](../TASKLIST.md) · [Checkpoint](../PROJECT_STATE.md) · [Arquitetura](../DESIGN.md). Não é aplicativo completo nem adoção concluída do protocolo.
+
+## Escopo executável da fatia
+
+`backend/jobs.py` persiste `Job` e transcrição importada em SQLite (WAL), pré-valida o plano de seções e usa transação `BEGIN IMMEDIATE` para reivindicar somente um job em `RUNNING`. `backend/api.py` fornece `create_app(db_path, analysis_provider=..., provider_name=..., model=..., revision=..., max_chars=...)`, exigindo um `AnalysisProvider` já selecionado, sem provedor padrão, chamadas ocultas, retry ou fallback. O FastAPI inicia o worker com `lifespan`. No Linux, `flock` exclusivo no arquivo vizinho ao banco rejeita segundo processo que tente executar esse mesmo aplicativo; **não** é lease para vários nós nem suporte a `uvicorn --workers N`.
+
+Entrada atual: `POST /api/jobs` recebe **transcrição já fornecida pelo usuário**, não URLs ou áudios. `GET /api/jobs/{id}` exibe estado e progresso; `GET /api/jobs/{id}/sections` traz apenas seções concluídas (não resumo global); `POST /api/jobs/{id}/resume` exige iniciativa explícita após falha/interrupção/limite. Erros desconhecidos são exibidos como códigos seguros, sem mensagens brutas de SDK. Sem autenticação de serviço público: **não expor rede externa**; futura composição executável deve fazer bind em `127.0.0.1`, um processo, e incluir a política de segurança de servidor local.
+
+Ao iniciar, o processo com lock transforma jobs deixados em `RUNNING` em `INTERRUPTED` com `REMOTE_OUTCOME_UNKNOWN`; não retransmite automaticamente requisições de resultado desconhecido. Jobs `QUEUED` são retomados pelo worker. Ao retomar manualmente, o sistema exige provedor/modelo/revisão/orçamento idênticos; `SQLiteSectionCheckpoint` valida hash da transcrição e divisão, reutilizando apenas seções comprovadamente gravadas. O worker nunca mantém transação aberta durante chamadas de IA. Cancelamento do worker no shutdown é cooperativo e não garante cancelamento do processamento remoto.
+
+## Gates, exclusões e execução
+
+Testes: `python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `PYTHONPATH=src python -m unittest discover -s tests -v`. [CI run 35552555937](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35552555937) validou o commit de código `5bf6cf8f` em Python 3.12/3.13; log do 3.13 confirma **87 testes PASS**. Oito testes novos cobrem HTTP, persistência, restart, timeout incerto, travamento de segundo processo, configuração e validação de entrada; usam fake, não rede nem credenciais. Após atualizar documentação, verificar novamente CI no HEAD final.
+
+**Limites:** não existe entrypoint de produção/provedor configurado, aquisição do YouTube, upload binário, job de STT, backup/migrações, cancelamento via endpoint, rate-limit com timer automático, lease multiworker, síntese global, UI nem E2E com vídeo real. `revision` é fornecida pelo chamador (não há detecção automática de mudanças de prompt). Nenhum teste Groq autenticado foi realizado. T-005 permanece parcial; T-007 também; T-004 mantém fonte editorial do protocolo pendente. Próxima fatia deve ligar uma configuração operacional segura à API local e validar o percurso com conteúdo autorizado, sem chamar isso de produto completo.
