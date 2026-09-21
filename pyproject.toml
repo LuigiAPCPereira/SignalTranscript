@@ -11,6 +11,7 @@ dependencies = ["fastapi>=0.128,<1"]
 [project.optional-dependencies]
 test = ["httpx>=0.28,<1"]
 serve = ["uvicorn>=0.30,<1"]
+groq = ["groq>=1.7,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
