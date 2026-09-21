@@ -1,6 +1,7 @@
 """A missing completed checkpoint must never be presented as success."""
 
 from pathlib import Path
+from contextlib import closing
 import sqlite3
 import tempfile
 import time
@@ -37,7 +38,8 @@ class IntegrityTests(unittest.TestCase):
                     time.sleep(.01)
                 else:
                     self.fail("job not completed")
-                with sqlite3.connect(database) as db:
-                    db.execute("DELETE FROM analysis_sections WHERE run_id=?", (job_id,))
+                with closing(sqlite3.connect(database)) as db:
+                    with db:
+                        db.execute("DELETE FROM analysis_sections WHERE run_id=?", (job_id,))
                 self.assertEqual(client.get(f"/api/jobs/{job_id}").status_code, 409)
                 self.assertEqual(client.get(f"/api/jobs/{job_id}/sections").status_code, 409)
