@@ -1,0 +1,30 @@
+name: Offline provider contracts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Python ${{ matrix.python-version }} / offline contracts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    env:
+      PYTHONPATH: src
+    steps:
+      - name: Checkout proposed revision
+        uses: actions/checkout@v7
+      - name: Configure Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Check Python syntax
+        run: python -m compileall -q src tests
+      - name: Run offline contract suite
+        run: python -m unittest discover -s tests -v
