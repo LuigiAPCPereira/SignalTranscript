@@ -36,10 +36,13 @@ class ImportInput(BaseModel):
 
 
 def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
+    completed = jobs.completed_sections(job.id)
+    if job.state == "COMPLETED" and completed != job.section_count:
+        raise HTTPException(status_code=409, detail="INVALID_CHECKPOINT")
     return {"id": job.id, "video_id": job.transcript.video_id, "state": job.state,
             "provider": job.provider, "model": job.model, "attempts": job.attempts,
             "planned_sections": job.section_count,
-            "completed_sections": jobs.completed_sections(job.id), "error_code": job.error_code,
+            "completed_sections": completed, "error_code": job.error_code,
             "result_kind": "SECTIONS_ONLY" if job.state == "COMPLETED" else None}
 
 
@@ -172,6 +175,8 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 max_chars=job.max_chars,
             )
             completed = checkpoint.open_and_load()
+            if job.state == "COMPLETED" and len(completed) != job.section_count:
+                raise CheckpointMismatch("INCOMPLETE_CHECKPOINT")
         except (CheckpointMismatch, ValueError, ChunkPlanningError):
             raise HTTPException(status_code=409, detail="INVALID_CHECKPOINT") from None
         return {"job_id": job.id, "complete": job.state == "COMPLETED",
