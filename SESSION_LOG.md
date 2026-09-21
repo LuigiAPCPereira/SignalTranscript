@@ -20,4 +20,11 @@
 - Tentativa de `git clone` para executar a suíte inteira sobre a revisão remota falhou por resolução de DNS do GitHub no ambiente. Arquivos são verificáveis pelo conector; CI, integração remota, E2E e faturamento seguem sem teste.
 - A decisão arquitetural adicionou uma fatia pequena ao PR #2 existente; não foi criado outro PR, e a `main` não foi alterada por essas operações.
 
-**Checkpoint vinculado:** T-004 documental e T-010 técnico, com T-003 parcial. Conferir [TASKLIST](TASKLIST.md), [PROJECT_STATE](PROJECT_STATE.md) e PRs/HEAD atuais antes de continuar.
+## 2026-09-20 — Adaptadores Groq STT e análise (T-003/T-010 parciais)
+
+- [PR #3](https://github.com/LuigiAPCPereira/SignalTranscript/pull/3) publicou `GroqTranscriptionAdapter` isolado, injeção de `AsyncGroq`, sem retries automáticos e classificação de erros; 31 testes locais passaram na cópia correspondente, sem chamada Groq real.
+- A pesquisa oficial confirmou suporte do GPT-OSS 120B a JSON Schema estrito, exigindo campos obrigatórios/objetos fechados e sem streaming/tools; documentação publica 8K TPM gratuito, não comprovado para esta conta. A partir do HEAD do PR #3 `8bec26d4`, criada branch `feat/t010-groq-analysis-adapter`.
+- Foi criado `GroqAnalysisAdapter` atrás da porta neutra, com entrada limitada sem truncamento, prompt que trata transcrição como dados, resposta fechada e validação de IDs. Mapeamento de erro Groq compartilhado com o STT. A cópia local de arquivos correspondentes passou 47 testes (16 novos) e `compileall`. Os arquivos tocados foram publicados via GitHub e devem ter SHA/PR final revalidados.
+- Limites: nenhum SDK instalado na verificação, requisição real, CI, modelo local/NIM, chunking de vídeo longo, verificação de aderência semântica, persistência ou E2E. A análise inicial produz resumo sem referências próprias e ideias com referências de segmentos; isso não comprova a veracidade de qualquer alegação.
+
+**Checkpoint vinculado:** T-004 documental, T-010 técnico e T-003 parcial. Conferir [TASKLIST](TASKLIST.md), [PROJECT_STATE](PROJECT_STATE.md) e PRs/HEAD atuais antes de continuar. Nenhum merge/deploy foi realizado nesta fatia.
