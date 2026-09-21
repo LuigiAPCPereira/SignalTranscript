@@ -6,6 +6,7 @@ implicit provider switch, network acquisition, or hidden retry.
 
 import asyncio
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 import fcntl
 from pathlib import Path
@@ -47,7 +48,8 @@ def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
 
 
 def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_name: str,
-               model: str, revision: str, max_chars: int = 12_000) -> FastAPI:
+               model: str, revision: str, max_chars: int = 12_000,
+               on_provider_shutdown: Callable[[], Awaitable[None]] | None = None) -> FastAPI:
     """One Linux process, one injected provider, one sequential worker."""
     if any(not isinstance(v, str) or not v.strip() for v in (provider_name, model, revision)):
         raise ValueError("provider, model and revision are required")
@@ -60,6 +62,13 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
         job = jobs.claim_next()
         if job is None:
             return False
+        # A queued job belongs to the exact original provider/model/contract.
+        # A new server configuration must not send its transcript to another
+        # provider or spend money silently after a restart.
+        if (job.provider, job.model, job.revision, job.max_chars) != (
+                provider_name, model, revision, max_chars):
+            jobs.finish(job.id, "INTERRUPTED", "CONFIGURATION_CHANGED")
+            return True
         try:
             checkpoint = SQLiteSectionCheckpoint(
                 jobs.path, run_id=job.id, transcript=job.transcript,
@@ -103,9 +112,10 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        jobs.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = (jobs.path.parent / (jobs.path.name + ".worker.lock")).open("a+b")
+        lock_file = None
         try:
+            jobs.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = (jobs.path.parent / (jobs.path.name + ".worker.lock")).open("a+b")
             try:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -122,7 +132,10 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 except asyncio.CancelledError:
                     pass
         finally:
-            lock_file.close()
+            if lock_file is not None:
+                lock_file.close()
+            if on_provider_shutdown is not None:
+                await on_provider_shutdown()
 
     app = FastAPI(title="SignalTranscript local analysis", lifespan=lifespan)
 
