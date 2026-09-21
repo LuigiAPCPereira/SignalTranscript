@@ -1,24 +1,23 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, desenvolvimento incremental com contratos e adaptadores offline; aplicação E2E ausente. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório documental](docs/ADOPTION_REPORT.md).
+**Observado em:** 2026-09-20. **Escopo:** MVP v0.1, contratos e adaptadores offline; sem aplicativo funcional ponta a ponta. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório de adoção](docs/ADOPTION_REPORT.md).
 
 ## Git e decisões
 
-- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. `main` observada anteriormente em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`, revalidar antes de qualquer integração.
-- Cadeia de revisão: PR #1 `docs/mvp-architecture-v0.1` (documentação); PR #2 `feat/t003-groq-contract-offline` (portas/normalização); PR #3 `feat/t003-groq-stt-adapter` (STT). Todos observados como Drafts, não mesclados, na recuperação desta fatia.
-- **Fatia atual:** branch `feat/t010-groq-analysis-adapter`, derivada do PR #3 HEAD `8bec26d46ad2c27ba8319b53f6fb3402c9dab3a8`. Revalidar HEAD/PR na conclusão da publicação; sem merge ou deploy nesta sessão.
-- Decisões do usuário: produto generalista, backend Python + FastAPI, Groq Whisper Turbo como integração inicial e independência entre provedores STT/LLM. GPT-OSS 120B permanece modelo proposto de análise com adaptador técnico offline; NIM/local não integrados.
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. `main` observada anteriormente no commit inicial `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; revalidar antes de merge.
+- PRs empilhados: [#1 documentação](https://github.com/LuigiAPCPereira/SignalTranscript/pull/1) -> [#2 portas/contrato](https://github.com/LuigiAPCPereira/SignalTranscript/pull/2) -> [#3 Groq STT](https://github.com/LuigiAPCPereira/SignalTranscript/pull/3) -> [#4 Groq análise](https://github.com/LuigiAPCPereira/SignalTranscript/pull/4). #4 observado aberto, draft e não mesclado; branch `feat/t010-groq-analysis-adapter`, base `feat/t003-groq-stt-adapter`. Consultar HEAD final do GitHub, nunca inferi-lo deste checkpoint autorreferencial.
+- Decidido pelo usuário: produto generalista, backend Python + FastAPI, Whisper Turbo/Groq como primeiro serviço e independência de provedores de transcrição e análise. GPT-OSS 120B possui adaptador técnico offline, mas operação real não verificada. NIM e modelos locais não estão integrados.
 
-## Protocolo e cobertura
+## Protocolo
 
-Notion v2.2 reaberto em 2026-09-20: **STAGING**. Versão canônica APPROVED/PUBLISHED, igualdade integral à cópia do Project e disponibilidade em Codex/agendamentos não certificadas. [ADOPTION_REPORT](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**. A branch remota foi consultada por GitHub; nenhum checkout Git do repositório foi obtido neste ambiente (DNS indisponível). Não inferir worktree.
+Índice central Notion v2.2 observado STAGING; release editorial APPROVED/PUBLISHED, equivalência do snapshot Project e acessibilidade em Codex/agendamentos **não certificadas**. [Relatório](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**. Inspeção de GitHub via conector, não de worktree local autenticada.
 
-## Tarefas e evidência
+## Tarefas, evidências e bloqueios
 
-- **T-004 (checkpoint documental):** cobertura das nove funções na branch, mas fonte editorial aprovada e integração na `main` pendentes. Não anunciar adoção concluída.
-- **T-003 (parcial):** normalizador/adapter Groq STT offline existentes. Classificador de erros extraído para módulo Groq compartilhado sem alterar interface neutra. Sem chamada real, áudio, limite de conta, chunk overlap ou validação CI.
-- **T-010 (fatia atual parcial):** portas/seleção independentes, Groq STT e `GroqAnalysisAdapter` offline; JSON Schema estrito, entrada limitada sem truncamento, rejeição de referências inexistentes, respostas incompletas e recusas, falhas tipadas. **47 testes locais passaram** na cópia de arquivos Git blob correspondentes (31 anteriores, 16 de análise); `compileall` passou. Sem SDK instalado, chave, modelo remoto, NIM/local, configuração persistida, CI ou E2E. [Nota técnica](docs/T010_GROQ_ANALYSIS.md).
-- **T-007:** pipeline de análise completa pendente: segmentação de vídeos longos, consolidação, versões/persistência, qualidade e evidência de início/meio/fim. A existência do adaptador não conclui esta tarefa.
-- T-005, T-006, T-008, T-009: pendentes conforme [TASKLIST](TASKLIST.md).
+- **T-004 (documental):** nove funções mapeadas, aprovação/equivalência da fonte canônica e merge pendentes.
+- **T-003 (parcial):** normalizador e adaptador STT com validação offline; nenhuma chamada autenticada Groq, áudio real, tamanho/cota efetiva ou chunk overlap. A suíte que os cobre passou no CI do PR #4, mas não valida seu contrato remoto.
+- **T-010 (parcial):** portas neutras, seleção independente sem fallback, adaptadores Groq STT/análise e classificador compartilhado de erros. No commit `0892000003a69fdb6ff4d6047b784ab1ad11aeef`, [GitHub Actions run 35548079915](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35548079915) concluiu **success** nos jobs Python 3.12/3.13, incluindo `compileall` e a suíte offline (47 testes declarados na revisão). Workflow `.github/workflows/offline-contracts.yml` foi reaberto após publicação. Documentos deste checkpoint vieram depois desse commit: revalidar CI no HEAD final antes de qualquer integração.
+- **T-007:** adaptador de análise não substitui pipeline: faltam chunks de vídeos longos, consolidação, versões/persistência e validação semântica/referências em conteúdo real.
+- **T-005/T-006/T-008/T-009:** aplicação, aquisição, jobs, interface e E2E continuam pendentes. Nenhum SDK instalado ou chave/API real validada nesta etapa.
 
-**Próxima ação executável:** revalidar HEAD/PR desta branch e arquivos publicados; para T-010/T-003, exercitar contratos reais Groq somente em ambiente seguro com conteúdo autorizado e chave local. Em T-007, implementar chunking e consolidar sem perder referências; T-004 continua com bloqueio editorial declarado. Não efetuar merge ou deploy automaticamente.
+**Próxima ação por ID:** verificar o CI no HEAD mais recente de #4 e preservar a evidência; para T-010/T-003, testar SDK e endpoints Groq somente em ambiente seguro com conteúdo autorizado e chave configurada localmente. T-007 depende de implementar pipeline de chunks, não de repetir experimentos isolados. T-004 continua com bloqueio editorial. Não fazer merge/deploy automaticamente.
