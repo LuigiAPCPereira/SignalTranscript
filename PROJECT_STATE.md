@@ -1,24 +1,23 @@
 # PROJECT_STATE — SignalTranscript / checkpoint
 
-**Observado em:** 2026-09-20 (horário local). **Escopo:** MVP v0.1; contratos, adaptadores e planejamento de análise por seções, sem aplicação ponta a ponta. **Fontes:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [relatório de adoção](docs/ADOPTION_REPORT.md).
+**Observado em:** 2026-09-20 (horário da Bahia). **Escopo:** MVP v0.1, portas/adaptadores offline, análise por seções e checkpoint local de seções; aplicativo completo não existe. **Autoridades:** [TASKLIST](TASKLIST.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [AGENTS](AGENTS.md), [adoção](docs/ADOPTION_REPORT.md).
 
 ## Git e decisões
 
-- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. `main` foi observada antes em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`; revalidar antes de qualquer integração.
-- Cadeia empilhada: PR #1 (documentação) -> #2 (portas/contrato) -> #3 (Groq STT) -> #4 (Groq análise). O PR #4 estava em Draft, aberto e não mesclado, HEAD `da71b922148608650b64f5481c25f3158562155d` na consulta desta etapa.
-- **Fatia T-007 atual:** branch `feat/t007-long-form-sections` criada desse HEAD do PR #4; conferir PR, HEAD e CI finais no GitHub após commits documentais. Sem merge/deploy autorizado nesta etapa; checkout Git remoto indisponível por DNS, embora arquivos sejam acessíveis via conector.
-- Decisões do usuário: produto generalista, Python + FastAPI, Groq Whisper Turbo como primeiro serviço e independência STT/LLM. GPT-OSS 120B possui adaptador offline. NIM e modelos locais ainda não estão integrados.
+- Repositório: https://github.com/LuigiAPCPereira/SignalTranscript. Base `main` vista antes em `e4fe22d6fee4120af33d9436f4b0e27864eb5df1`, revalidar antes de merge. A cadeia PR #1 (docs) -> #2 (portas) -> #3 (STT) -> #4 (análise) -> #5 (seções) foi observada aberta em Draft.
+- **Fatia atual T-007:** branch `feat/t007-section-checkpoints` derivada do HEAD `c0f35a6bd7e9a14c6ba330d2bc29b8bed7720d64` do PR #5. PR, HEAD final e CI devem ser confirmados após publicação; nenhum merge/deploy realizado por esta fatia. Git checkout remoto não disponível neste ambiente (DNS), embora conteúdos sejam acessíveis pelo conector GitHub.
+- Decidido pelo usuário: produto generalista, Python + FastAPI, Groq Whisper Turbo inicial e independência por função para IA. GPT-OSS 120B é adaptador offline; NIM e modelos locais não foram integrados.
 
 ## Protocolo
 
-Notion v2.2 observado STAGING na última consulta: publicação editorial aprovada e igualdade integral ao Project ainda não certificadas; acessibilidade em outras sessões/agendamentos desconhecida. O [ADOPTION_REPORT](docs/ADOPTION_REPORT.md) permanece em **ADOÇÃO PARCIAL**. Não declarar adoção concluída, nem inferir acesso ou permissões.
+Manifesto v2.2 disponível no Project está marcado STAGING/NÃO PUBLICADO INTEGRALMENTE; versão editorial aprovada, equivalência de conteúdo ao Project e disponibilidade em outras sessões/agendamentos não verificadas. [ADOPTION_REPORT](docs/ADOPTION_REPORT.md): **ADOÇÃO PARCIAL**. Nove funções documentadas, fonte aprovada pendente; não inventar autoridade.
 
-## Tarefas e evidência
+## Tarefas e evidências
 
-- **T-004:** nove funções mapeadas no repositório, fonte canônica aprovada/equivalência e merge documental pendentes.
-- **T-003 (parcial):** normalizador/adaptador STT testados offline; API autenticada, áudio e limites reais não validados.
-- **T-010 (parcial):** portas neutras, seleção independente e Groq STT/análise offline; GitHub Actions no HEAD de #4 `da71b922`: [run 35548137252](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35548137252) `success` em Python 3.12/3.13 com 47 testes existentes; não comprova uso real de provedores.
-- **T-007 (fatia implementada offline, tarefa não concluída):** [nota](docs/T007_LONG_FORM.md), planejador pré-valida todos os segmentos sem truncar, execução sequencial usa `AnalysisProvider`, referências por seção e resultados parciais explícitos; 17 testes locais de comportamento passaram e arquivos novos foram publicados com hashes conferidos. CI desta branch e PR final ainda devem ser consultados; sem síntese global, sobreposição, persistência, modelo real ou prova semântica de conteúdo.
-- T-005/T-006/T-008/T-009 continuam pendentes: sem API FastAPI funcional, aquisição operacional, worker persistente, interface ou E2E.
+- **T-004:** documentação e mapeamento de nove funções existem na branch documental; fonte aprovada, equivalência e integração não confirmadas.
+- **T-003/T-010 (parciais):** portas neutras e adaptadores Groq STT/análise testados offline; CI [run 35548137252](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35548137252) aprovado Python 3.12/3.13 no PR #4. SDK real, áudio, API autenticada, cotas e NIM/local pendentes.
+- **T-007 (fatia parcial de persistência):** `ai/long_form.py` executa plano imutável com prefixo validado; `ai/section_checkpoint.py` guarda runs e seções em SQLite, vinculando run ID, digest de transcrição/plano, provedor/modelo e revisão explícita. Reabre seções íntegras, rejeita alterações/corrupção/ordem inválida e não marca resposta remota desconhecida como sucesso. Em cópia local: 32 testes das duas fatias + compileall PASS; hashes dos três arquivos Python novos/modificados confrontados com blobs publicados. **CI desta branch no HEAD final ainda requer confirmação.** [Nota técnica](docs/T007_LONG_FORM.md).
+- **T-005:** não há FastAPI, scheduler, lease multiworker, persistência de vídeos/transcrições nem recuperação de job; a biblioteca SQLite de seções não conclui T-005.
+- **T-006/T-008/T-009:** aquisição, interface e E2E ausentes. T-007 ainda precisa de síntese global referenciada, cobertura semântica real e integração com worker.
 
-**Próxima ação por ID:** T-007 — verificar CI na ref final, depois integrar política de seções ao worker persistente quando T-005 estiver disponível; preservar seções e prover síntese global verificável sem fabricar evidências. T-003/T-010 — contrato real em ambiente seguro com conteúdo autorizado, nunca chave no repo; T-004 — reconciliar fonte canônica quando estiver aprovada. Não fazer merge/deploy automático.
+**Próxima ação por ID:** confirmar PR/HEAD/CI desta fatia; avançar T-005 em backend/worker ao resolver critérios documentais, sem confundir checkpoint com job durável. T-007 exige síntese global representativa, versões/persistência da análise completa e validação real. T-003/T-010 exigem testes reais autorizados. Nunca efetuar merge/deploy sem autorização e gates.
