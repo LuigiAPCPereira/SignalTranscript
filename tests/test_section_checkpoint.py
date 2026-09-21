@@ -1,5 +1,6 @@
 """SQLite checkpoint contract tests: no Groq SDK, credentials or network."""
 
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -110,12 +111,12 @@ class CheckpointTests(unittest.IsolatedAsyncioTestCase):
         a = await analyze_with_checkpoint(self.store(run_id="v1"), Fake())
         b = await analyze_with_checkpoint(self.store(run_id="v2", revision="new"), Fake())
         self.assertTrue(a.complete and b.complete)
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM analysis_runs").fetchone()[0], 2)
 
     async def test_corrupt_payload_detected_before_remote(self):
         await analyze_with_checkpoint(self.store(), Fake(failure_at=1))
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute("UPDATE analysis_sections SET payload='{}' WHERE section_index=0")
         provider = Fake()
         with self.assertRaises(CheckpointMismatch):
@@ -124,7 +125,7 @@ class CheckpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_evidence_in_checkpoint_detected_before_remote(self):
         await analyze_with_checkpoint(self.store(), Fake(failure_at=1))
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             row = conn.execute("SELECT payload FROM analysis_sections WHERE section_index=0").fetchone()
             payload = json.loads(row[0])
             payload["analysis"]["ideas"][0]["source_segment_ids"] = ["foreign"]
@@ -137,7 +138,7 @@ class CheckpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_noncontiguous_checkpoint_detected(self):
         await analyze_with_checkpoint(self.store(), Fake(failure_at=2))
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute("UPDATE analysis_sections SET section_index=4 WHERE section_index=1")
         with self.assertRaisesRegex(CheckpointMismatch, "NONCONTIGUOUS_CHECKPOINT"):
             self.store().open_and_load()

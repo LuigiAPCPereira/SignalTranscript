@@ -65,12 +65,20 @@ def build_app(*, provider: str, db_path: Path,
         raise ValueError("INVALID_ANALYSIS_REGISTRATION")
     instance = registration.create()
     close = getattr(instance, "aclose", None)
-    return create_app(
+    app = create_app(
         Path(db_path), analysis_provider=instance, provider_name=registration.name,
         model=registration.model, revision=registration.revision,
         max_chars=registration.max_chars,
         on_provider_shutdown=close if callable(close) else None,
     )
+
+    @app.get("/api/config")
+    async def public_local_config():
+        """Non-secret identity for explicit consent BEFORE posting transcripts."""
+        return {"analysis_provider": registration.name, "model": registration.model,
+                "result_kind": "SECTIONS_ONLY"}
+
+    return app
 
 
 def main(argv: Sequence[str] | None = None) -> int:
