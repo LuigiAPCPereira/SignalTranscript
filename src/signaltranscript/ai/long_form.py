@@ -137,24 +137,45 @@ async def analyze_in_sections(
     planned = plan_sections(
         transcript, max_chars=max_chars, measure=measure, max_sections=max_sections,
     )
-    completed: list[AnalyzedSection] = []
+    return await _analyze_planned(transcript.video_id, planned, provider,
+                                  on_section_complete=on_section_complete)
+
+
+async def _analyze_planned(
+    video_id: str, planned: tuple[Transcript, ...], provider: AnalysisProvider, *,
+    previous: tuple[AnalyzedSection, ...] = (),
+    on_section_complete: Callable[[AnalyzedSection], Awaitable[None]] | None = None,
+) -> SectionedAnalysis:
+    """Execute an immutable plan, optionally starting after validated checkpoints."""
+    if len(previous) > len(planned):
+        raise ValueError("checkpoint contains too many sections")
     provider_identity: tuple[str, str] | None = None
-    for index, section in enumerate(planned):
+    for index, analyzed in enumerate(previous):
+        if analyzed.index != index or analyzed.segment_ids != tuple(seg.id for seg in planned[index].segments):
+            raise ValueError("checkpoint does not match section plan")
+        validate_analysis(planned[index], analyzed.analysis)
+        identity = (analyzed.analysis.provider, analyzed.analysis.model)
+        if provider_identity is not None and identity != provider_identity:
+            raise ValueError("checkpoint mixes providers or models")
+        provider_identity = identity
+    completed: list[AnalyzedSection] = list(previous)
+    for index in range(len(previous), len(planned)):
+        section = planned[index]
         try:
             analysis = await provider.analyze(section)
         except ProviderFailure as failure:
-            return SectionedAnalysis(transcript.video_id, len(planned), tuple(completed), failure)
+            return SectionedAnalysis(video_id, len(planned), tuple(completed), failure)
         try:
             validate_analysis(section, analysis)
         except ValueError:
             return SectionedAnalysis(
-                transcript.video_id, len(planned), tuple(completed),
+                video_id, len(planned), tuple(completed),
                 ProviderFailure("INVALID_RESPONSE"),
             )
         identity = (analysis.provider, analysis.model)
         if provider_identity is not None and provider_identity != identity:
             return SectionedAnalysis(
-                transcript.video_id, len(planned), tuple(completed),
+                video_id, len(planned), tuple(completed),
                 ProviderFailure("PROVIDER_CHANGED"),
             )
         analyzed = AnalyzedSection(index, tuple(seg.id for seg in section.segments), analysis)
@@ -162,4 +183,4 @@ async def analyze_in_sections(
             await on_section_complete(analyzed)
         completed.append(analyzed)
         provider_identity = identity
-    return SectionedAnalysis(transcript.video_id, len(planned), tuple(completed))
+    return SectionedAnalysis(video_id, len(planned), tuple(completed))
