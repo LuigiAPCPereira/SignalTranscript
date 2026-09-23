@@ -1,9 +1,11 @@
 """Offline SQLite backup primitive for the local SignalTranscript store.
 
-This module never uploads data and never overwrites an existing backup.  It uses
+This module never uploads data and never overwrites an existing backup. It uses
 SQLite's online backup API instead of copying database/WAL files independently.
 """
 
+import argparse
+from collections.abc import Sequence
 from pathlib import Path
 import os
 import sqlite3
@@ -37,7 +39,9 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
         finally:
             os.umask(old_umask)
         source_db.backup(destination_db)
-        destination_db.execute("PRAGMA integrity_check").fetchone()
+        integrity = destination_db.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise sqlite3.DatabaseError("backup integrity check failed")
         destination_db.close()
         destination_db = None
         os.chmod(destination, 0o600)
@@ -52,3 +56,23 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
         raise BackupError("SQLITE_BACKUP_FAILED") from exc
     finally:
         source_db.close()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Create an explicit local backup; no default destination or overwrite."""
+    parser = argparse.ArgumentParser(description="Create a local SignalTranscript SQLite snapshot")
+    parser.add_argument("--source", required=True, type=Path,
+                        help="existing SQLite database to snapshot")
+    parser.add_argument("--destination", required=True, type=Path,
+                        help="new backup path; existing files are never replaced")
+    args = parser.parse_args(argv)
+    try:
+        backup_sqlite(args.source, args.destination)
+    except (BackupError, OSError):
+        # Keep paths and SQLite internals out of terminal/log output.
+        parser.error("backup could not be created safely")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
