@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from signaltranscript.ai.long_form import plan_sections
 from signaltranscript.ai.ports import Segment, Transcript
+from signaltranscript.backend.caption_evidence import CaptionEvidence, parse_manifest
 
 STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED"})
 
@@ -35,6 +36,7 @@ class Job:
     section_count: int
     attempts: int
     error_code: str | None
+    evidence: CaptionEvidence | None = None
 
 
 def safe_code(code: object) -> str:
@@ -48,6 +50,21 @@ def _transcript(raw: str) -> Transcript:
         segments=tuple(Segment(**segment) for segment in data["segments"]),
         language=data.get("language"), provider=data.get("provider"), model=data.get("model"),
     )
+
+
+def _import_payload(transcript: Transcript) -> dict[str, object]:
+    return {
+        "video_id": transcript.video_id,
+        "source": transcript.source,
+        "language": transcript.language,
+        "segments": [asdict(segment) for segment in transcript.segments],
+    }
+
+
+def _evidence(raw: str | None, transcript: Transcript) -> CaptionEvidence | None:
+    if raw is None:
+        return None
+    return parse_manifest(json.loads(raw), _import_payload(transcript))
 
 
 class SQLiteJobs:
@@ -79,7 +96,11 @@ class SQLiteJobs:
                 max_chars INTEGER NOT NULL,
                 section_count INTEGER NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT)""")
+                error_code TEXT,
+                evidence_json TEXT)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "evidence_json" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN evidence_json TEXT")
 
     def recover_interrupted(self) -> None:
         """Only call while holding the exclusive process lock."""
@@ -88,7 +109,7 @@ class SQLiteJobs:
                        "WHERE state='RUNNING'")
 
     def enqueue(self, transcript: Transcript, *, provider: str, model: str,
-                revision: str, max_chars: int) -> Job:
+                revision: str, max_chars: int, evidence: CaptionEvidence | None = None) -> Job:
         for value in (provider, model, revision):
             if not isinstance(value, str) or not value.strip() or len(value) > 256:
                 raise ValueError("invalid analysis identity")
@@ -97,20 +118,29 @@ class SQLiteJobs:
         payload = json.dumps(asdict(transcript), ensure_ascii=False, separators=(",", ":"))
         if len(payload.encode("utf-8")) > 2_000_000:
             raise ValueError("transcript exceeds local upload limits")
+        evidence_json = None
+        if evidence is not None:
+            validated = parse_manifest(asdict(evidence), _import_payload(transcript))
+            evidence_json = json.dumps(asdict(validated), ensure_ascii=False,
+                                       sort_keys=True, separators=(",", ":"))
         sections = plan_sections(transcript, max_chars=max_chars)
         job_id = uuid4().hex
         with self._db() as db:
             db.execute("""INSERT INTO jobs
-                (id,state,transcript_json,provider,model,revision,max_chars,section_count)
-                VALUES (?, 'QUEUED', ?, ?, ?, ?, ?, ?)""",
-                (job_id, payload, provider, model, revision, max_chars, len(sections)))
+                (id,state,transcript_json,provider,model,revision,max_chars,section_count,evidence_json)
+                VALUES (?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)""",
+                (job_id, payload, provider, model, revision, max_chars, len(sections), evidence_json))
         return self.get(job_id)  # type: ignore[return-value]
 
     def get(self, job_id: str) -> Job | None:
         with self._db() as db:
             row = db.execute("""SELECT id,state,transcript_json,provider,model,revision,
-                max_chars,section_count,attempts,error_code FROM jobs WHERE id=?""", (job_id,)).fetchone()
-        return (Job(row[0], row[1], _transcript(row[2]), *row[3:]) if row else None)
+                max_chars,section_count,attempts,error_code,evidence_json FROM jobs WHERE id=?""",
+                             (job_id,)).fetchone()
+        if row is None:
+            return None
+        transcript = _transcript(row[2])
+        return Job(row[0], row[1], transcript, *row[3:10], _evidence(row[10], transcript))
 
     def completed_sections(self, job_id: str) -> int:
         with self._db() as db:
@@ -122,7 +152,6 @@ class SQLiteJobs:
     def claim_next(self) -> Job | None:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            # Enforce at most one RUNNING job in the single-process MVP.
             if db.execute("SELECT 1 FROM jobs WHERE state='RUNNING' LIMIT 1").fetchone():
                 return None
             row = db.execute("SELECT id FROM jobs WHERE state='QUEUED' ORDER BY rowid LIMIT 1").fetchone()
