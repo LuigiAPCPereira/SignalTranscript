@@ -1,6 +1,8 @@
 """Offline FastAPI/SQLite integration: injected provider, no SDK or network."""
 
 from pathlib import Path
+from dataclasses import asdict
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -11,6 +13,7 @@ from signaltranscript.ai.errors import ProviderFailure
 from signaltranscript.ai.long_form import compact_source_chars
 from signaltranscript.ai.ports import Analysis, Idea, Segment, Transcript
 from signaltranscript.backend.api import create_app
+from signaltranscript.backend.caption_evidence import canonical_transcript_sha256, parse_manifest
 from signaltranscript.backend.jobs import JobConflict, SQLiteJobs
 
 
@@ -26,6 +29,29 @@ def body() -> dict:
     return {"video_id": tr.video_id, "source": tr.source, "language": tr.language,
             "segments": [{"id": s.id, "text": s.text,
                           "start_ms": s.start_ms, "end_ms": s.end_ms} for s in tr.segments]}
+
+
+def evidence() -> dict[str, object]:
+    payload = body()
+    return {
+        "schema_version": 2,
+        "source_kind": "user_supplied_caption",
+        "caption_format": "srt",
+        "caption_sha256": "a" * 64,
+        "transcript_sha256": "b" * 64,
+        "transcript_content_sha256": canonical_transcript_sha256(payload),
+        "declared_video_id": payload["video_id"],
+        "authorization_status": "UNVERIFIED",
+        "video_identity_status": "UNVERIFIED",
+        "timeline_match_status": "UNVERIFIED",
+        "deep_links_allowed": False,
+    }
+
+
+def body_with_evidence() -> dict:
+    payload = body()
+    payload["evidence"] = evidence()
+    return payload
 
 
 def budget() -> int:
@@ -81,6 +107,26 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(resumed.state, "QUEUED")
         self.assertEqual(self.jobs.claim_next().attempts, 2)
 
+    def test_provenance_is_persisted_and_old_database_migrates(self):
+        record = parse_manifest(evidence(), body())
+        job = self.jobs.enqueue(transcript(), provider="fake", model="test-model", revision="v1",
+                                max_chars=budget(), evidence=record)
+        reopened = SQLiteJobs(self.path).get(job.id)
+        self.assertEqual(reopened.evidence, record)
+
+        legacy = Path(self.tmp.name) / "legacy.db"
+        with sqlite3.connect(legacy) as db:
+            db.execute("""CREATE TABLE jobs (
+                id TEXT PRIMARY KEY, state TEXT NOT NULL, transcript_json TEXT NOT NULL,
+                provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL,
+                max_chars INTEGER NOT NULL, section_count INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, error_code TEXT)""")
+        migrated = SQLiteJobs(legacy)
+        migrated.initialize()
+        with sqlite3.connect(legacy) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        self.assertIn("evidence_json", columns)
+
     def test_transcript_and_input_limits(self):
         with self.assertRaises(ValueError):
             self.jobs.enqueue(transcript(), provider="", model="test-model", revision="v1", max_chars=budget())
@@ -111,6 +157,8 @@ class APIIntegrationTests(unittest.TestCase):
         with TestClient(self.app(fake)) as client:
             response = client.post("/api/jobs", json=body())
             self.assertEqual(response.status_code, 202)
+            self.assertFalse(response.json()["provenance"]["evidence_present"])
+            self.assertFalse(response.json()["provenance"]["deep_links_allowed"])
             job_id = response.json()["id"]
             complete = poll(client, job_id)
             self.assertEqual(complete["state"], "COMPLETED")
@@ -120,9 +168,37 @@ class APIIntegrationTests(unittest.TestCase):
             self.assertEqual(result.status_code, 200)
             self.assertTrue(result.json()["complete"])
             self.assertEqual(len(result.json()["sections"]), 2)
+            self.assertFalse(result.json()["provenance"]["deep_links_allowed"])
             self.assertNotIn("summary", result.json())
             self.assertEqual(client.get("/api/jobs/does-not-exist").status_code, 404)
         self.assertEqual(fake.calls, [("s1",), ("s2",)])
+
+    def test_caption_evidence_is_validated_and_persisted_without_enabling_links(self):
+        fake = FakeProvider()
+        with TestClient(self.app(fake)) as client:
+            response = client.post("/api/jobs", json=body_with_evidence())
+            self.assertEqual(response.status_code, 202, response.text)
+            provenance = response.json()["provenance"]
+            self.assertTrue(provenance["evidence_present"])
+            self.assertEqual(provenance["evidence_schema"], 2)
+            self.assertEqual(provenance["video_identity_status"], "UNVERIFIED")
+            self.assertFalse(provenance["deep_links_allowed"])
+            job_id = response.json()["id"]
+            stored = SQLiteJobs(self.path).get(job_id)
+            self.assertIsNotNone(stored.evidence)
+            self.assertEqual(asdict(stored.evidence), evidence())
+            self.assertEqual(poll(client, job_id)["state"], "COMPLETED")
+
+        forged = body_with_evidence()
+        forged["evidence"]["video_identity_status"] = "VERIFIED"
+        changed = body_with_evidence()
+        changed["segments"][0]["text"] = "Changed after the manifest"
+        wrong_video = body_with_evidence()
+        wrong_video["video_id"] = "another-video"
+        with TestClient(self.app(FakeProvider())) as client:
+            for invalid in (forged, changed, wrong_video):
+                with self.subTest(invalid=invalid):
+                    self.assertEqual(client.post("/api/jobs", json=invalid).status_code, 422)
 
     def test_unknown_remote_outcome_waits_for_explicit_resume_and_reuses_prefix(self):
         fake = FakeProvider(fail_at=2)
@@ -169,3 +245,7 @@ class APIIntegrationTests(unittest.TestCase):
         with TestClient(self.app(FakeProvider())) as client:
             self.assertEqual(client.post("/api/jobs", json=invalid).status_code, 422)
             self.assertEqual(client.post("/api/jobs", json={}).status_code, 422)
+
+
+if __name__ == "__main__":
+    unittest.main()
