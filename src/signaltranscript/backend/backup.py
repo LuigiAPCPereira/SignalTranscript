@@ -2,6 +2,7 @@
 
 This module never uploads data and never overwrites an existing backup. It uses
 SQLite's online backup API instead of copying database/WAL files independently.
+A completed snapshot is published atomically only after its integrity check.
 """
 
 import argparse
@@ -9,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 import os
 import sqlite3
+import tempfile
 
 
 class BackupError(ValueError):
@@ -30,31 +32,52 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
 
     source_db = sqlite3.connect(f"file:{source.resolve()}?mode=ro", uri=True, timeout=5)
     destination_db = None
+    temporary: Path | None = None
     try:
-        # Refuse arbitrary/non-SQLite input before creating the destination.
+        # Refuse arbitrary/non-SQLite input before allocating a snapshot file.
         source_db.execute("PRAGMA schema_version").fetchone()
-        old_umask = os.umask(0o077)
-        try:
-            destination_db = sqlite3.connect(destination, timeout=5)
-        finally:
-            os.umask(old_umask)
+        source_integrity = source_db.execute("PRAGMA integrity_check").fetchone()
+        if source_integrity is None or source_integrity[0] != "ok":
+            raise sqlite3.DatabaseError("source integrity check failed")
+
+        # Build beside the destination so publication stays on one filesystem.
+        # mkstemp uses O_EXCL and mode 0600; the random file is never a valid
+        # advertised backup name while SQLite is still writing it.
+        fd, raw_temporary = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        )
+        os.close(fd)
+        temporary = Path(raw_temporary)
+        destination_db = sqlite3.connect(temporary, timeout=5)
         source_db.backup(destination_db)
         integrity = destination_db.execute("PRAGMA integrity_check").fetchone()
         if integrity is None or integrity[0] != "ok":
             raise sqlite3.DatabaseError("backup integrity check failed")
         destination_db.close()
         destination_db = None
-        os.chmod(destination, 0o600)
-        return destination
-    except sqlite3.Error as exc:
-        if destination_db is not None:
-            destination_db.close()
+        os.chmod(temporary, 0o600)
+
+        # Hard-link publication is atomic and refuses to replace a destination
+        # that appeared after the preflight check. Then remove the private temp.
         try:
-            destination.unlink(missing_ok=True)
-        except OSError:
-            pass
+            os.link(temporary, destination)
+        except FileExistsError as exc:
+            raise BackupError("DESTINATION_EXISTS") from exc
+        temporary.unlink()
+        temporary = None
+        return destination
+    except BackupError:
+        raise
+    except sqlite3.Error as exc:
         raise BackupError("SQLITE_BACKUP_FAILED") from exc
     finally:
+        if destination_db is not None:
+            destination_db.close()
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         source_db.close()
 
 
