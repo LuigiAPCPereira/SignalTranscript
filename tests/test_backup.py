@@ -3,8 +3,9 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from signaltranscript.backend.backup import BackupError, backup_sqlite
+from signaltranscript.backend.backup import BackupError, backup_sqlite, main
 
 
 class SQLiteBackupTests(unittest.TestCase):
@@ -47,6 +48,31 @@ class SQLiteBackupTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             backup_sqlite(bad, target)
         self.assertFalse(target.exists())
+
+    def test_integrity_failure_removes_partial_destination(self):
+        target = self.root / "failed.backup.db"
+        with patch("sqlite3.Connection.backup", side_effect=sqlite3.DatabaseError("simulated")):
+            with self.assertRaisesRegex(BackupError, "SQLITE_BACKUP_FAILED"):
+                backup_sqlite(self.source, target)
+        self.assertFalse(target.exists())
+
+    def test_cli_requires_explicit_paths_and_creates_snapshot(self):
+        target = self.root / "cli.backup.db"
+        self.assertEqual(main(["--source", str(self.source), "--destination", str(target)]), 0)
+        with sqlite3.connect(target) as db:
+            self.assertEqual(db.execute("SELECT value FROM sample").fetchone()[0], "checkpoint")
+
+    def test_cli_failure_is_sanitized_and_does_not_overwrite(self):
+        target = self.root / "existing.db"
+        target.write_text("keep", encoding="utf-8")
+        with patch("sys.stderr") as stderr, self.assertRaises(SystemExit) as raised:
+            main(["--source", str(self.source), "--destination", str(target)])
+        self.assertEqual(raised.exception.code, 2)
+        rendered = "".join(str(call) for call in stderr.write.call_args_list)
+        self.assertIn("backup could not be created safely", rendered)
+        self.assertNotIn(str(self.source), rendered)
+        self.assertNotIn(str(target), rendered)
+        self.assertEqual(target.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":
