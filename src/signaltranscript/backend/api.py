@@ -57,7 +57,6 @@ def provenance_view(job: Job) -> dict[str, object]:
         "authorization_status": evidence.authorization_status if evidence is not None else "UNVERIFIED",
         "video_identity_status": evidence.video_identity_status if evidence is not None else "UNVERIFIED",
         "timeline_match_status": evidence.timeline_match_status if evidence is not None else "UNVERIFIED",
-        # Timeline equality to a submitted caption is not video identity/synchrony.
         "deep_links_allowed": False,
     }
 
@@ -204,6 +203,16 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
         except JobConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         wake.set()
+        return view(jobs, job)
+
+    @app.post("/api/jobs/{job_id}/cancel", status_code=200)
+    async def cancel(job_id: str):
+        try:
+            job = jobs.cancel(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="JOB_NOT_FOUND") from None
+        except JobConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
         return view(jobs, job)
 
     @app.get("/api/jobs/{job_id}/sections")
