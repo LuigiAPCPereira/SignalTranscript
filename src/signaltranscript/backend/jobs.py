@@ -64,7 +64,9 @@ def _import_payload(transcript: Transcript) -> dict[str, object]:
 def _evidence(raw: str | None, transcript: Transcript) -> CaptionEvidence | None:
     if raw is None:
         return None
-    return parse_manifest(json.loads(raw), _import_payload(transcript))
+    return parse_manifest(
+        json.loads(raw), _import_payload(transcript), allow_verified_timeline=True,
+    )
 
 
 class SQLiteJobs:
@@ -120,7 +122,10 @@ class SQLiteJobs:
             raise ValueError("transcript exceeds local upload limits")
         evidence_json = None
         if evidence is not None:
-            validated = parse_manifest(asdict(evidence), _import_payload(transcript))
+            validated = parse_manifest(
+                asdict(evidence), _import_payload(transcript),
+                allow_verified_timeline=evidence.timeline_match_status == "VERIFIED",
+            )
             evidence_json = json.dumps(asdict(validated), ensure_ascii=False,
                                        sort_keys=True, separators=(",", ":"))
         sections = plan_sections(transcript, max_chars=max_chars)
