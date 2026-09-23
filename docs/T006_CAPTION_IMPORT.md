@@ -1,10 +1,10 @@
-# T-006 — Importação local SRT/WebVTT e manifesto de integridade
+# T-006 — Importação local, manifesto e proveniência persistente
 
-**Estado:** importação de legenda e manifesto local implementados na branch `feat/t006-caption-import`, PR #10 empilhado sobre #9; **T-006 PARCIAL**. O trabalho não baixa vídeo, não transcreve áudio, não chama IA, não comprova licença, identidade do vídeo ou sincronização, e não produz links temporais. [TASKLIST](../TASKLIST.md) · [PRD](../PRD.md) · [DESIGN](../DESIGN.md) · [teste operacional](T005_SMOKE_TEST.md).
+**Estado:** T-006 permanece **PARCIAL** na branch `feat/t006-caption-import`, PR #10 sobre #9. O fluxo implementado cobre SRT/WebVTT fornecido pelo usuário, manifesto local de integridade v2, passagem opcional pelo smoke, validação HTTP e persistência SQLite. Não cobre aquisição do YouTube, comprovação de direitos, identidade/sincronização real do vídeo, áudio/FFmpeg, STT real ou E2E completo. [TASKLIST](../TASKLIST.md) · [PRD](../PRD.md) · [DESIGN](../DESIGN.md).
 
-## Fluxo reproduzível no Linux — sem rede
+## Fluxo reproduzível no Linux
 
-Use uma legenda `.srt` ou `.vtt` já obtida de forma permitida. O `video_id` é apenas uma declaração do usuário; o arquivo não traz prova de que pertence a esse vídeo. Não inclua material confidencial em diretórios públicos.
+Use uma legenda `.srt` ou `.vtt` **já obtida de forma permitida**. Nenhum vídeo é baixado e nenhuma API é consultada pelos passos de importação/evidência.
 
 ```bash
 python -m pip install -e '.[test]'
@@ -13,35 +13,56 @@ chmod 700 "$HOME/.local/share/signaltranscript"
 
 python -m signaltranscript.backend.caption_import \
   --input "/caminho/para/legenda.vtt" \
-  --video-id "id-declarado-pelo-usuario" --language pt-BR \
+  --video-id "id-declarado-do-video" --language pt-BR \
   --output "$HOME/.local/share/signaltranscript/transcricao-importada.json"
 
 python -m signaltranscript.backend.caption_evidence create \
   --caption "/caminho/para/legenda.vtt" \
   --transcript "$HOME/.local/share/signaltranscript/transcricao-importada.json" \
-  --manifest "$HOME/.local/share/signaltranscript/evidencia.json"
+  --manifest "$HOME/.local/share/signaltranscript/legenda-evidence.json"
 
 python -m signaltranscript.backend.caption_evidence verify \
   --caption "/caminho/para/legenda.vtt" \
   --transcript "$HOME/.local/share/signaltranscript/transcricao-importada.json" \
-  --manifest "$HOME/.local/share/signaltranscript/evidencia.json"
+  --manifest "$HOME/.local/share/signaltranscript/legenda-evidence.json"
 
 python -m signaltranscript.backend.smoke \
-  --transcript "$HOME/.local/share/signaltranscript/transcricao-importada.json"
+  --transcript "$HOME/.local/share/signaltranscript/transcricao-importada.json" \
+  --evidence "$HOME/.local/share/signaltranscript/legenda-evidence.json"
 ```
 
-A última chamada é pré-validação local, sem HTTP/IA. Para eventual envio **separadamente autorizado**, consulte [T005_SMOKE_TEST](T005_SMOKE_TEST.md); `--submit` exige confirmação expressa e pode consumir cota. A chave Groq só pertence ao ambiente do servidor, nunca ao JSON, manifesto, repositório ou chat.
+A última chamada é somente pré-validação local enquanto `--submit` não for informado. O smoke confere o hash canônico da transcrição e o manifesto **antes de qualquer HTTP**. Envio para um provedor continua uma operação separada, opt-in, com as proteções de [T005_SMOKE_TEST](T005_SMOKE_TEST.md).
 
-## Contratos e interpretações
+## Contrato do manifesto v2
 
-O importador suporta cues simples de SRT (`HH:MM:SS,mmm`) e WebVTT (`MM:SS.mmm` ou `HH:MM:SS.mmm`), UTF-8/BOM, texto multilinha e configurações de posicionamento VTT conhecidas. Produz `source=manual_import`, IDs por posição e milissegundos copiados do arquivo. Preserva cues simultâneos/sobrepostos, não corrige áudio ou sincronização e rejeita timebase especial `X-TIMESTAMP-MAP`, timestamps inválidos, symlinks de entrada, arquivos/JSON acima de 512.000 bytes, mais de 4.096 cues e textos individuais acima de 12.000 caracteres. A saída é criada exclusivamente (`0600`) em diretório existente privado (`0700`); nenhuma sobrescrita.
+O manifesto contém SHA-256 dos bytes da legenda, SHA-256 dos bytes do JSON importado e `transcript_content_sha256`, calculado sobre o contrato canônico `video_id/source/language/segments` com serialização determinística. O hash canônico permite que a API confirme que o manifesto apresentado corresponde ao conteúdo da transcrição mesmo que espaçamento/ordem das chaves do arquivo JSON sejam diferentes.
 
-O manifesto separado tem `schema_version=1`, `source_kind=user_supplied_caption`, formato da legenda, SHA-256 dos **bytes exatos** da legenda e do JSON, `declared_video_id`, e estados invariáveis `authorization_status=UNVERIFIED`, `video_identity_status=UNVERIFIED`, `timeline_match_status=UNVERIFIED`, `deep_links_allowed=false`. A criação reconverte a legenda e exige igualdade exata com o JSON importado; a verificação refaz essa checagem, compara hashes e rejeita campos adicionais ou estados falsamente promovidos. Não são gravados caminhos locais ou textos de legenda no manifesto.
+Os estados são deliberadamente restritos:
 
-**O que se comprova:** este par de arquivos corresponde à conversão local e não mudou desde a criação do manifesto, sob a suposição de que manifesto e arquivos não foram todos substituídos por um mesmo agente. Hash não é assinatura, prova de autoria, autorização de uso, identidade do vídeo ou prova de sincronização. `video_id` não é extraído da fonte; horários são relativos à legenda e não estão confirmados contra o vídeo. A referência de uma ideia a um segmento da transcrição também não prova factualidade externa.
+- `authorization_status = UNVERIFIED`;
+- `video_identity_status = UNVERIFIED`;
+- `timeline_match_status = UNVERIFIED`;
+- `deep_links_allowed = false`.
 
-**Limite de integração:** o manifesto é um artefato **local e separado**; a atual `ImportInput`, o banco SQLite e o smoke do PR #9 **não persistem nem verificam esse manifesto**. Portanto, não adicionar campos extras ao JSON esperando que a API os conserve; não derivar links YouTube do ID ou dos timestamps importados. O manifesto e a legenda original precisam ser preservados junto ao JSON; verificar antes de reutilizar. Integrar a proveniência ao domínio, à persistência e a uma futura política de habilitação de deep links requer trabalho separado com migração e testes ponta a ponta.
+A API rejeita estados `VERIFIED` autodeclarados, `video_id` diferente, hash canônico divergente, esquema/campos inesperados e manifesto de origem incompatível. Isso **não comprova** o hash da legenda no servidor, porque a legenda não é enviada à API; ele permanece evidência sidecar fornecida pelo usuário.
 
-## Verificação e limites restantes
+## Persistência e respostas HTTP
 
-`python -m compileall -q src tests` e `python -m unittest discover -s tests -v` são executados no CI. Testes do importador cobrem formato, limites, privacidade e contrato HTTP; `tests/test_caption_evidence.py` cobre hashes e igualdade da conversão, mutações da legenda/JSON, falsificação de status, symlinks, sobrescrita e CLI offline. Conferir a execução de CI do **HEAD exato** após mudanças documentais. **T-006 continua PARCIAL:** vídeo real e proveniência certificada, ingestão persistente de evidências, aquisição permitida, áudio/FFmpeg, transcrição real/chunks e E2E ainda não foram executados. T-004 e a adoção do protocolo permanecem parciais enquanto a autoridade aprovada e equivalência da fonte não estiverem certificadas.
+`POST /api/jobs` aceita o campo opcional `evidence`. Se presente, ele é validado antes de enfileirar o job e persistido em `jobs.evidence_json`. `SQLiteJobs.initialize()` adiciona a coluna a bancos antigos que ainda não a possuam.
+
+`GET /api/jobs/{id}` e `GET /api/jobs/{id}/sections` devolvem somente o estado seguro de proveniência — presença/esquema, os três estados `UNVERIFIED` e `deep_links_allowed=false` — sem expor hashes desnecessariamente. Importações sem manifesto também permanecem não verificadas e com deep links desabilitados.
+
+O smoke verifica esse estado na criação, durante polling e no resultado de seções. Um sidecar adulterado ou uma transcrição alterada depois da criação do manifesto falha antes do POST.
+
+## Parser e limites da legenda
+
+- SRT `HH:MM:SS,mmm` e WebVTT `MM:SS.mmm`/`HH:MM:SS.mmm`, UTF-8/BOM, texto multilinha e settings VTT conhecidos.
+- Tempos são copiados do arquivo; cues simultâneos/sobrepostos são mantidos; não há deduplicação, tradução ou sincronização.
+- Entrada vazia, timestamps regressivos/inválidos, cue malformado, symlink, formato desconhecido, mais de 4.096 cues, cue acima de 12.000 caracteres, arquivo/JSON acima de 512.000 bytes e WebVTT com timebase especial são rejeitados.
+- Saídas ficam em diretório privado, arquivos `0600`, sem overwrite.
+
+## Evidência de validação e lacunas
+
+A revisão de integração `4d39b441094afece691854654829e18953e6c25f` passou no GitHub Actions em Python 3.12 e 3.13; o log Python 3.13 registrou **129 testes PASS**. Houve uma revisão anterior do novo smoke que falhou porque o teste incluiu o campo opcional `evidence=None` no cálculo do hash canônico; a causa foi identificada e corrigida antes desta validação.
+
+T-006 continua parcial: não existe critério implementado que transforme `UNVERIFIED` em `VERIFIED`. Portanto, **nenhum deep link temporal deve ser criado a partir de importação manual nesta fase**. Permanecem pendentes aquisição permitida, validação real de identidade/sincronia, áudio/FFmpeg/chunks, Groq autenticada ou outro STT real, frontend/biblioteca e E2E. O protocolo do projeto continua em ADOÇÃO PARCIAL enquanto a fonte canônica aprovada/equivalência não estiver comprovada.
