@@ -1,12 +1,13 @@
 """Offline, tamper-evident evidence for a user-supplied caption import.
 
 Hashes bind local files and canonical transcript content. They do NOT prove
-rights, video identity, synchronization, or that a temporal deep link is valid.
+rights, video identity, synchronization with a real video, or by themselves
+that a temporal deep link is valid.
 """
 
 import argparse
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ import stat
 import sys
 
 from signaltranscript.backend.caption_import import (
-    CaptionImportError, MAX_BYTES, convert, save_private,
+    CaptionImportError, MAX_BYTES, convert, parse_captions, save_private,
 )
 
 MANIFEST_FIELDS = frozenset({
@@ -74,8 +75,16 @@ def canonical_transcript_sha256(payload: Mapping[str, object]) -> str:
     return sha256(encoded).hexdigest()
 
 
-def parse_manifest(data: object, transcript_payload: Mapping[str, object]) -> CaptionEvidence:
-    """Validate a manifest against the exact canonical transcript submitted to the API."""
+def parse_manifest(
+    data: object, transcript_payload: Mapping[str, object], *,
+    allow_verified_timeline: bool = False,
+) -> CaptionEvidence:
+    """Validate a manifest against the exact canonical transcript.
+
+    User input may never claim verification. ``allow_verified_timeline`` is for
+    reloading a record that this process already promoted after re-parsing the
+    submitted caption bytes with :func:`verify_submitted_caption`.
+    """
     if not isinstance(data, Mapping) or set(data) != MANIFEST_FIELDS:
         raise CaptionEvidenceError("INVALID_EVIDENCE_MANIFEST")
     if type(data["schema_version"]) is not int or data["schema_version"] != 2:
@@ -88,8 +97,10 @@ def parse_manifest(data: object, transcript_payload: Mapping[str, object]) -> Ca
     if (not isinstance(data["declared_video_id"], str) or not data["declared_video_id"].strip()
             or len(data["declared_video_id"]) > 256):
         raise CaptionEvidenceError("INVALID_EVIDENCE_MANIFEST")
-    if any(data[key] != "UNVERIFIED" for key in (
-            "authorization_status", "video_identity_status", "timeline_match_status")):
+    if data["authorization_status"] != "UNVERIFIED" or data["video_identity_status"] != "UNVERIFIED":
+        raise CaptionEvidenceError("UNSUPPORTED_VERIFICATION_CLAIM")
+    allowed_timeline = {"UNVERIFIED", "VERIFIED"} if allow_verified_timeline else {"UNVERIFIED"}
+    if data["timeline_match_status"] not in allowed_timeline:
         raise CaptionEvidenceError("UNSUPPORTED_VERIFICATION_CLAIM")
     if data["deep_links_allowed"] is not False:
         raise CaptionEvidenceError("UNSUPPORTED_VERIFICATION_CLAIM")
@@ -100,6 +111,42 @@ def parse_manifest(data: object, transcript_payload: Mapping[str, object]) -> Ca
     if data["transcript_content_sha256"] != canonical_transcript_sha256(transcript_payload):
         raise CaptionEvidenceError("EVIDENCE_TRANSCRIPT_MISMATCH")
     return CaptionEvidence(**{key: data[key] for key in MANIFEST_FIELDS})  # type: ignore[arg-type]
+
+
+def verify_submitted_caption(
+    data: object, transcript_payload: Mapping[str, object], *, caption_text: str,
+    caption_format: str,
+) -> CaptionEvidence:
+    """Promote only caption→transcript timeline correspondence after recomputation.
+
+    This verifies that the exact submitted SRT/VTT bytes hash to the manifest and
+    parse to the exact transcript segments/timestamps. It does NOT establish that
+    the caption belongs to the declared video or is synchronized to that video,
+    so identity/authorization stay UNVERIFIED and deep links stay disabled.
+    """
+    evidence = parse_manifest(data, transcript_payload)
+    if caption_format != evidence.caption_format or caption_format not in {"srt", "vtt"}:
+        raise CaptionEvidenceError("EVIDENCE_CAPTION_FORMAT_MISMATCH")
+    if not isinstance(caption_text, str):
+        raise CaptionEvidenceError("INVALID_CAPTION_FILE")
+    try:
+        raw = caption_text.encode("utf-8")
+    except UnicodeError:
+        raise CaptionEvidenceError("INVALID_CAPTION_FILE") from None
+    if len(raw) > MAX_BYTES or sha256(raw).hexdigest() != evidence.caption_sha256:
+        raise CaptionEvidenceError("EVIDENCE_CAPTION_MISMATCH")
+    try:
+        expected = {
+            "video_id": transcript_payload.get("video_id"),
+            "source": "manual_import",
+            "language": transcript_payload.get("language"),
+            "segments": parse_captions(caption_text, caption_format),
+        }
+    except CaptionImportError as exc:
+        raise CaptionEvidenceError(str(exc)) from None
+    if expected != dict(transcript_payload):
+        raise CaptionEvidenceError("CAPTION_TRANSCRIPT_MISMATCH")
+    return replace(evidence, timeline_match_status="VERIFIED")
 
 
 def build_manifest(caption: Path, transcript: Path) -> dict[str, object]:
