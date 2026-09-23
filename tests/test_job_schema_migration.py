@@ -100,6 +100,15 @@ class JobSchemaMigrationTests(unittest.TestCase):
         self.assertIn("future_semantics", columns)
         self.assertNotIn("evidence_json", columns)
 
+    def test_corrupt_database_fails_closed_with_sanitized_error(self):
+        original = b"not a sqlite database\x00with local details"
+        self.path.write_bytes(original)
+
+        with self.assertRaisesRegex(RuntimeError, "^DATABASE_INTEGRITY_FAILED$"):
+            SQLiteJobs(self.path).initialize()
+
+        self.assertEqual(self.path.read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()
