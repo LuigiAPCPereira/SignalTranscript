@@ -19,6 +19,11 @@ from signaltranscript.backend.caption_evidence import CaptionEvidence, parse_man
 
 STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED", "CANCELLED"})
 SCHEMA_VERSION = 2
+_JOB_REQUIRED_COLUMNS = frozenset({
+    "id", "state", "transcript_json", "provider", "model", "revision",
+    "max_chars", "section_count", "attempts", "error_code",
+})
+_JOB_CURRENT_COLUMNS = _JOB_REQUIRED_COLUMNS | {"evidence_json"}
 
 
 class JobConflict(ValueError):
@@ -93,6 +98,20 @@ class SQLiteJobs:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
                 raise RuntimeError("DATABASE_SCHEMA_NEWER_THAN_RUNTIME")
+
+            table_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+            ).fetchone() is not None
+            if table_exists:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+                # Version 0 predates explicit migrations, but it is only safe to
+                # adopt a database whose known journal shape is complete. Refuse
+                # incompatible/partial schemas before ALTER or user_version writes.
+                if not _JOB_REQUIRED_COLUMNS.issubset(columns):
+                    raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
+                if not columns.issubset(_JOB_CURRENT_COLUMNS):
+                    raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
+
             db.execute("""CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
                 state TEXT NOT NULL,
