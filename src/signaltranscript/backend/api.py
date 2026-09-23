@@ -19,7 +19,10 @@ from signaltranscript.ai.ports import AnalysisProvider, Segment, Transcript
 from signaltranscript.ai.section_checkpoint import (
     CheckpointMismatch, SQLiteSectionCheckpoint, analyze_with_checkpoint,
 )
-from signaltranscript.backend.caption_evidence import CaptionEvidenceError, parse_manifest
+from signaltranscript.backend.caption_evidence import (
+    CaptionEvidenceError, parse_manifest, verify_submitted_caption,
+)
+from signaltranscript.backend.caption_import import MAX_BYTES
 from signaltranscript.backend.jobs import Job, JobConflict, SQLiteJobs, safe_code
 
 
@@ -30,12 +33,18 @@ class SegmentInput(BaseModel):
     end_ms: int | None = None
 
 
+class CaptionVerificationInput(BaseModel):
+    format: str = Field(pattern="^(srt|vtt)$")
+    text: str = Field(min_length=1, max_length=MAX_BYTES)
+
+
 class ImportInput(BaseModel):
     video_id: str = Field(min_length=1, max_length=256)
     source: str = Field(min_length=1, max_length=256)
     language: str | None = Field(default=None, max_length=64)
     segments: list[SegmentInput] = Field(min_length=1, max_length=4_096)
     evidence: dict[str, object] | None = None
+    caption_verification: CaptionVerificationInput | None = None
 
 
 def provenance_view(job: Job) -> dict[str, object]:
@@ -46,7 +55,7 @@ def provenance_view(job: Job) -> dict[str, object]:
         "authorization_status": evidence.authorization_status if evidence is not None else "UNVERIFIED",
         "video_identity_status": evidence.video_identity_status if evidence is not None else "UNVERIFIED",
         "timeline_match_status": evidence.timeline_match_status if evidence is not None else "UNVERIFIED",
-        # No current ingestion path may promote a manual import to a verified deep link.
+        # Timeline equality to a submitted caption is not video identity/synchrony.
         "deep_links_allowed": False,
     }
 
@@ -152,9 +161,18 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
     @app.post("/api/jobs", status_code=202)
     async def submit(payload: ImportInput):
         try:
-            transcript_payload = payload.model_dump(exclude={"evidence"})
-            evidence = (parse_manifest(payload.evidence, transcript_payload)
-                        if payload.evidence is not None else None)
+            transcript_payload = payload.model_dump(exclude={"evidence", "caption_verification"})
+            if payload.caption_verification is not None and payload.evidence is None:
+                raise CaptionEvidenceError("CAPTION_VERIFICATION_REQUIRES_EVIDENCE")
+            if payload.caption_verification is not None:
+                evidence = verify_submitted_caption(
+                    payload.evidence, transcript_payload,
+                    caption_text=payload.caption_verification.text,
+                    caption_format=payload.caption_verification.format,
+                )
+            else:
+                evidence = (parse_manifest(payload.evidence, transcript_payload)
+                            if payload.evidence is not None else None)
             transcript = Transcript(
                 video_id=payload.video_id, source=payload.source,
                 language=payload.language,
