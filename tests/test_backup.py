@@ -49,6 +49,28 @@ class SQLiteBackupTests(unittest.TestCase):
             backup_sqlite(bad, target)
         self.assertFalse(target.exists())
 
+    def test_publication_race_never_overwrites_destination_or_leaves_temp(self):
+        target = self.root / "raced.db"
+        real_link = os.link
+
+        def destination_appears(source, destination):
+            Path(destination).write_bytes(b"competitor")
+            return real_link(source, destination)
+
+        with patch("signaltranscript.backend.backup.os.link", side_effect=destination_appears):
+            with self.assertRaisesRegex(BackupError, "DESTINATION_EXISTS"):
+                backup_sqlite(self.source, target)
+        self.assertEqual(target.read_bytes(), b"competitor")
+        self.assertEqual(list(self.root.glob(f".{target.name}.*.tmp")), [])
+
+    def test_failed_snapshot_is_never_published_and_temp_is_removed(self):
+        target = self.root / "failed.db"
+        with patch("sqlite3.Connection.backup", side_effect=sqlite3.DatabaseError("boom")):
+            with self.assertRaisesRegex(BackupError, "SQLITE_BACKUP_FAILED"):
+                backup_sqlite(self.source, target)
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.root.glob(f".{target.name}.*.tmp")), [])
+
     def test_cli_requires_explicit_paths_and_creates_snapshot(self):
         target = self.root / "cli.backup.db"
         self.assertEqual(main(["--source", str(self.source), "--destination", str(target)]), 0)
