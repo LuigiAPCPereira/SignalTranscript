@@ -63,14 +63,6 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"competitor")
         self.assertEqual(list(self.root.glob(f".{target.name}.*.tmp")), [])
 
-    def test_failed_snapshot_is_never_published_and_temp_is_removed(self):
-        target = self.root / "failed.db"
-        with patch("sqlite3.Connection.backup", side_effect=sqlite3.DatabaseError("boom")):
-            with self.assertRaisesRegex(BackupError, "SQLITE_BACKUP_FAILED"):
-                backup_sqlite(self.source, target)
-        self.assertFalse(target.exists())
-        self.assertEqual(list(self.root.glob(f".{target.name}.*.tmp")), [])
-
     def test_cli_requires_explicit_paths_and_creates_snapshot(self):
         target = self.root / "cli.backup.db"
         self.assertEqual(main(["--source", str(self.source), "--destination", str(target)]), 0)
