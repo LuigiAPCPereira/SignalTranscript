@@ -93,43 +93,55 @@ class SQLiteJobs:
     def initialize(self) -> None:
         """Create or migrate the local job schema without accepting unknown futures."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._db() as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > SCHEMA_VERSION:
-                raise RuntimeError("DATABASE_SCHEMA_NEWER_THAN_RUNTIME")
+        try:
+            with self._db() as db:
+                # Validate the database before changing journal mode, schema, or
+                # user_version. A damaged journal must never be "migrated" into a
+                # shape that appears current and recoverable.
+                integrity = db.execute("PRAGMA integrity_check").fetchall()
+                if integrity != [("ok",)]:
+                    raise RuntimeError("DATABASE_INTEGRITY_FAILED")
 
-            table_exists = db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
-            ).fetchone() is not None
-            if table_exists:
+                db.execute("PRAGMA journal_mode=WAL")
+                version = db.execute("PRAGMA user_version").fetchone()[0]
+                if version > SCHEMA_VERSION:
+                    raise RuntimeError("DATABASE_SCHEMA_NEWER_THAN_RUNTIME")
+
+                table_exists = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+                ).fetchone() is not None
+                if table_exists:
+                    columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+                    # Version 0 predates explicit migrations, but it is only safe to
+                    # adopt a database whose known journal shape is complete. Refuse
+                    # incompatible/partial schemas before ALTER or user_version writes.
+                    if not _JOB_REQUIRED_COLUMNS.issubset(columns):
+                        raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
+                    if not columns.issubset(_JOB_CURRENT_COLUMNS):
+                        raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
+
+                db.execute("""CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL,
+                    transcript_json TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    revision TEXT NOT NULL,
+                    max_chars INTEGER NOT NULL,
+                    section_count INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    error_code TEXT,
+                    evidence_json TEXT)""")
                 columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
-                # Version 0 predates explicit migrations, but it is only safe to
-                # adopt a database whose known journal shape is complete. Refuse
-                # incompatible/partial schemas before ALTER or user_version writes.
-                if not _JOB_REQUIRED_COLUMNS.issubset(columns):
-                    raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
-                if not columns.issubset(_JOB_CURRENT_COLUMNS):
-                    raise RuntimeError("DATABASE_SCHEMA_INCOMPATIBLE")
-
-            db.execute("""CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                transcript_json TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                revision TEXT NOT NULL,
-                max_chars INTEGER NOT NULL,
-                section_count INTEGER NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT,
-                evidence_json TEXT)""")
-            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
-            if "evidence_json" not in columns:
-                db.execute("ALTER TABLE jobs ADD COLUMN evidence_json TEXT")
-            # Historical databases predate user_version. The structural migration
-            # above is idempotent, so version 0 can be upgraded conservatively.
-            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                if "evidence_json" not in columns:
+                    db.execute("ALTER TABLE jobs ADD COLUMN evidence_json TEXT")
+                # Historical databases predate user_version. The structural migration
+                # above is idempotent, so version 0 can be upgraded conservatively.
+                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        except sqlite3.DatabaseError as exc:
+            # Do not expose SQLite's raw message or paths through callers. The
+            # original database is left in place for explicit recovery/backup.
+            raise RuntimeError("DATABASE_INTEGRITY_FAILED") from exc
 
     def recover_interrupted(self) -> None:
         """Only call while holding the exclusive process lock."""
