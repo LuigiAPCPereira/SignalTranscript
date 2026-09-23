@@ -17,7 +17,7 @@ from signaltranscript.ai.long_form import plan_sections
 from signaltranscript.ai.ports import Segment, Transcript
 from signaltranscript.backend.caption_evidence import CaptionEvidence, parse_manifest
 
-STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED"})
+STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED", "CANCELLED"})
 
 
 class JobConflict(ValueError):
@@ -174,6 +174,26 @@ class SQLiteJobs:
                                  (state, safe_code(error) if error else None, job_id)).rowcount
             if changed != 1:
                 raise JobConflict("JOB_NOT_RUNNING")
+
+    def cancel(self, job_id: str) -> Job:
+        """Cancel only work that is known not to be executing remotely.
+
+        RUNNING is deliberately rejected: the local journal cannot prove that a
+        provider request was cancelled, so it must not publish a false terminal
+        cancellation state for in-flight work.
+        """
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            state = row[0]
+            if state == "RUNNING":
+                raise JobConflict("REMOTE_CANCELLATION_UNCONFIRMED")
+            if state not in {"QUEUED", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT"}:
+                raise JobConflict("JOB_NOT_CANCELLABLE")
+            db.execute("UPDATE jobs SET state='CANCELLED',error_code=NULL WHERE id=?", (job_id,))
+        return self.get(job_id)  # type: ignore[return-value]
 
     def resume(self, job_id: str, *, provider: str, model: str, revision: str,
                max_chars: int) -> Job:
