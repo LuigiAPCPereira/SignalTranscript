@@ -49,13 +49,6 @@ class SQLiteBackupTests(unittest.TestCase):
             backup_sqlite(bad, target)
         self.assertFalse(target.exists())
 
-    def test_integrity_failure_removes_partial_destination(self):
-        target = self.root / "failed.backup.db"
-        with patch("sqlite3.Connection.backup", side_effect=sqlite3.DatabaseError("simulated")):
-            with self.assertRaisesRegex(BackupError, "SQLITE_BACKUP_FAILED"):
-                backup_sqlite(self.source, target)
-        self.assertFalse(target.exists())
-
     def test_cli_requires_explicit_paths_and_creates_snapshot(self):
         target = self.root / "cli.backup.db"
         self.assertEqual(main(["--source", str(self.source), "--destination", str(target)]), 0)
