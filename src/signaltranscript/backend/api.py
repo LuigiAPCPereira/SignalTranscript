@@ -44,7 +44,9 @@ class ImportInput(BaseModel):
     language: str | None = Field(default=None, max_length=64)
     segments: list[SegmentInput] = Field(min_length=1, max_length=4_096)
     evidence: dict[str, object] | None = None
-    caption_verification: CaptionVerificationInput | None = None
+    # Transport-only verification material must never become part of the
+    # canonical transcript model/hash when callers use model_dump().
+    caption_verification: CaptionVerificationInput | None = Field(default=None, exclude=True)
 
 
 def provenance_view(job: Job) -> dict[str, object]:
