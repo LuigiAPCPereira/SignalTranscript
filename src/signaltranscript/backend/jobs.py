@@ -18,6 +18,7 @@ from signaltranscript.ai.ports import Segment, Transcript
 from signaltranscript.backend.caption_evidence import CaptionEvidence, parse_manifest
 
 STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED", "CANCELLED"})
+SCHEMA_VERSION = 2
 
 
 class JobConflict(ValueError):
@@ -85,9 +86,13 @@ class SQLiteJobs:
             conn.close()
 
     def initialize(self) -> None:
+        """Create or migrate the local job schema without accepting unknown futures."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError("DATABASE_SCHEMA_NEWER_THAN_RUNTIME")
             db.execute("""CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
                 state TEXT NOT NULL,
@@ -103,6 +108,9 @@ class SQLiteJobs:
             columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
             if "evidence_json" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN evidence_json TEXT")
+            # Historical databases predate user_version. The structural migration
+            # above is idempotent, so version 0 can be upgraded conservatively.
+            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def recover_interrupted(self) -> None:
         """Only call while holding the exclusive process lock."""
