@@ -7,7 +7,8 @@ import unittest
 
 from signaltranscript.backend.caption_import import convert, save_private
 from signaltranscript.backend.caption_evidence import (
-    CaptionEvidenceError, build_manifest, main, verify_manifest,
+    CaptionEvidenceError, build_manifest, canonical_transcript_sha256,
+    main, parse_manifest, verify_manifest,
 )
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nA fala sintética.\n"
@@ -31,13 +32,38 @@ class CaptionEvidenceTests(unittest.TestCase):
     def test_manifest_is_unverified_even_when_timestamp_exists(self):
         self.create()
         evidence = json.loads(self.manifest.read_text())
+        self.assertEqual(evidence["schema_version"], 2)
         self.assertEqual(evidence["authorization_status"], "UNVERIFIED")
         self.assertEqual(evidence["video_identity_status"], "UNVERIFIED")
         self.assertEqual(evidence["timeline_match_status"], "UNVERIFIED")
         self.assertIs(evidence["deep_links_allowed"], False)
         self.assertEqual(evidence["declared_video_id"], "user-declared-id")
         self.assertEqual(len(evidence["caption_sha256"]), 64)
+        self.assertEqual(len(evidence["transcript_content_sha256"]), 64)
         verify_manifest(self.caption, self.transcript, self.manifest)
+
+    def test_canonical_hash_ignores_json_whitespace_but_not_content(self):
+        payload = json.loads(self.transcript.read_text())
+        original = canonical_transcript_sha256(payload)
+        reordered = {"segments": payload["segments"], "language": payload["language"],
+                     "source": payload["source"], "video_id": payload["video_id"]}
+        self.assertEqual(canonical_transcript_sha256(reordered), original)
+        reordered["segments"][0]["text"] = "Outro texto"
+        self.assertNotEqual(canonical_transcript_sha256(reordered), original)
+
+    def test_parse_manifest_binds_api_payload_and_rejects_forged_claims(self):
+        payload = json.loads(self.transcript.read_text())
+        record = build_manifest(self.caption, self.transcript)
+        parsed = parse_manifest(record, payload)
+        self.assertEqual(parsed.declared_video_id, payload["video_id"])
+        forged = dict(record)
+        forged["video_identity_status"] = "VERIFIED"
+        with self.assertRaisesRegex(CaptionEvidenceError, "UNSUPPORTED_VERIFICATION_CLAIM"):
+            parse_manifest(forged, payload)
+        changed = json.loads(json.dumps(payload))
+        changed["segments"][0]["text"] = "Mudou"
+        with self.assertRaisesRegex(CaptionEvidenceError, "EVIDENCE_TRANSCRIPT_MISMATCH"):
+            parse_manifest(record, changed)
 
     def test_caption_change_invalidates_evidence(self):
         self.create()
