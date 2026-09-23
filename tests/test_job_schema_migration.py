@@ -66,6 +66,40 @@ class JobSchemaMigrationTests(unittest.TestCase):
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
             ).fetchone())
 
+    def test_partial_legacy_schema_is_rejected_before_mutation(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
+            db.execute("INSERT INTO jobs VALUES ('legacy', 'QUEUED')")
+
+        with self.assertRaisesRegex(RuntimeError, "DATABASE_SCHEMA_INCOMPATIBLE"):
+            SQLiteJobs(self.path).initialize()
+
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(
+                {row[1] for row in db.execute("PRAGMA table_info(jobs)")},
+                {"id", "state"},
+            )
+            self.assertEqual(db.execute("SELECT * FROM jobs").fetchone(), ("legacy", "QUEUED"))
+
+    def test_unknown_legacy_columns_are_rejected_without_adoption(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("""CREATE TABLE jobs (
+                id TEXT PRIMARY KEY, state TEXT NOT NULL, transcript_json TEXT NOT NULL,
+                provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL,
+                max_chars INTEGER NOT NULL, section_count INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, error_code TEXT,
+                future_semantics TEXT NOT NULL DEFAULT 'keep')""")
+
+        with self.assertRaisesRegex(RuntimeError, "DATABASE_SCHEMA_INCOMPATIBLE"):
+            SQLiteJobs(self.path).initialize()
+
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 0)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        self.assertIn("future_semantics", columns)
+        self.assertNotIn("evidence_json", columns)
+
 
 if __name__ == "__main__":
     unittest.main()
