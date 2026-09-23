@@ -19,6 +19,7 @@ from signaltranscript.ai.ports import AnalysisProvider, Segment, Transcript
 from signaltranscript.ai.section_checkpoint import (
     CheckpointMismatch, SQLiteSectionCheckpoint, analyze_with_checkpoint,
 )
+from signaltranscript.backend.caption_evidence import CaptionEvidenceError, parse_manifest
 from signaltranscript.backend.jobs import Job, JobConflict, SQLiteJobs, safe_code
 
 
@@ -34,6 +35,20 @@ class ImportInput(BaseModel):
     source: str = Field(min_length=1, max_length=256)
     language: str | None = Field(default=None, max_length=64)
     segments: list[SegmentInput] = Field(min_length=1, max_length=4_096)
+    evidence: dict[str, object] | None = None
+
+
+def provenance_view(job: Job) -> dict[str, object]:
+    evidence = job.evidence
+    return {
+        "evidence_present": evidence is not None,
+        "evidence_schema": evidence.schema_version if evidence is not None else None,
+        "authorization_status": evidence.authorization_status if evidence is not None else "UNVERIFIED",
+        "video_identity_status": evidence.video_identity_status if evidence is not None else "UNVERIFIED",
+        "timeline_match_status": evidence.timeline_match_status if evidence is not None else "UNVERIFIED",
+        # No current ingestion path may promote a manual import to a verified deep link.
+        "deep_links_allowed": False,
+    }
 
 
 def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
@@ -44,7 +59,8 @@ def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
             "provider": job.provider, "model": job.model, "attempts": job.attempts,
             "planned_sections": job.section_count,
             "completed_sections": completed, "error_code": job.error_code,
-            "result_kind": "SECTIONS_ONLY" if job.state == "COMPLETED" else None}
+            "result_kind": "SECTIONS_ONLY" if job.state == "COMPLETED" else None,
+            "provenance": provenance_view(job)}
 
 
 def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_name: str,
@@ -62,9 +78,6 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
         job = jobs.claim_next()
         if job is None:
             return False
-        # A queued job belongs to the exact original provider/model/contract.
-        # A new server configuration must not send its transcript to another
-        # provider or spend money silently after a restart.
         if (job.provider, job.model, job.revision, job.max_chars) != (
                 provider_name, model, revision, max_chars):
             jobs.finish(job.id, "INTERRUPTED", "CONFIGURATION_CHANGED")
@@ -93,18 +106,15 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
         except (CheckpointMismatch, ChunkPlanningError, ValueError):
             jobs.finish(job.id, "FAILED", "INVALID_JOB_CONFIGURATION")
         except Exception:
-            # Never return raw provider responses or filesystem errors to clients.
             jobs.finish(job.id, "FAILED", "INTERNAL_ERROR")
         return True
 
     async def worker() -> None:
         while True:
             if await run_once():
-                await asyncio.sleep(0)  # allow HTTP requests between jobs
+                await asyncio.sleep(0)
                 continue
             wake.clear()
-            # There may have been an enqueue just before clear(): periodic wake
-            # prevents lost notifications; tasks remain durable in SQLite.
             try:
                 await asyncio.wait_for(wake.wait(), timeout=0.25)
             except TimeoutError:
@@ -142,14 +152,17 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
     @app.post("/api/jobs", status_code=202)
     async def submit(payload: ImportInput):
         try:
+            transcript_payload = payload.model_dump(exclude={"evidence"})
+            evidence = (parse_manifest(payload.evidence, transcript_payload)
+                        if payload.evidence is not None else None)
             transcript = Transcript(
                 video_id=payload.video_id, source=payload.source,
                 language=payload.language,
                 segments=tuple(Segment(**segment.model_dump()) for segment in payload.segments),
             )
             job = jobs.enqueue(transcript, provider=provider_name, model=model,
-                               revision=revision, max_chars=max_chars)
-        except (ValueError, ChunkPlanningError) as exc:
+                               revision=revision, max_chars=max_chars, evidence=evidence)
+        except (CaptionEvidenceError, ValueError, ChunkPlanningError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)[:100]) from None
         wake.set()
         return view(jobs, job)
@@ -180,7 +193,8 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
             raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
         if jobs.completed_sections(job.id) == 0 and job.state != "COMPLETED":
             return {"job_id": job.id, "complete": False, "result_kind": "SECTIONS_ONLY",
-                    "planned_sections": job.section_count, "sections": []}
+                    "planned_sections": job.section_count, "sections": [],
+                    "provenance": provenance_view(job)}
         try:
             checkpoint = SQLiteSectionCheckpoint(
                 jobs.path, run_id=job.id, transcript=job.transcript,
@@ -194,6 +208,7 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
             raise HTTPException(status_code=409, detail="INVALID_CHECKPOINT") from None
         return {"job_id": job.id, "complete": job.state == "COMPLETED",
                 "result_kind": "SECTIONS_ONLY", "planned_sections": job.section_count,
-                "sections": [asdict(section) for section in completed]}
+                "sections": [asdict(section) for section in completed],
+                "provenance": provenance_view(job)}
 
     return app
