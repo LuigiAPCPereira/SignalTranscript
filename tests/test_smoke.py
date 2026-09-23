@@ -54,7 +54,7 @@ class SmokeTests(unittest.TestCase):
         record = {"schema_version": 2, "source_kind": "user_supplied_caption",
                   "caption_format": "srt", "caption_sha256": "a" * 64,
                   "transcript_sha256": "b" * 64,
-                  "transcript_content_sha256": canonical_transcript_sha256(self.payload),
+                  "transcript_content_sha256": canonical_transcript_sha256({k: v for k, v in self.payload.items() if k != "evidence"}),
                   "declared_video_id": "synthetic", "authorization_status": "UNVERIFIED",
                   "video_identity_status": "UNVERIFIED", "timeline_match_status": "UNVERIFIED",
                   "deep_links_allowed": False}
