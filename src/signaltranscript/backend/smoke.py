@@ -5,6 +5,7 @@ resume, fallback or recording of transcribed text in CLI output.
 """
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 import re
@@ -15,6 +16,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from signaltranscript.ai.ports import Segment, Transcript
 from signaltranscript.backend.api import ImportInput
+from signaltranscript.backend.caption_evidence import CaptionEvidenceError, parse_manifest
 
 JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED", "WAITING_RATE_LIMIT", "CANCELLED"}
@@ -25,21 +27,36 @@ class SmokeFailure(Exception):
     """An operational error safe to show without echoing transcript or keys."""
 
 
-def load_fixture(path: Path) -> tuple[dict[str, object], Transcript]:
+def _read_json_file(path: Path, code: str) -> object:
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 512_000:
-            raise SmokeFailure("INVALID_TRANSCRIPT_FILE")
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        # Reuse the exact HTTP input boundary, not a second homegrown schema.
+            raise SmokeFailure(code)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, TypeError, UnicodeError, OSError):
+        raise SmokeFailure(code) from None
+
+
+def load_fixture(path: Path, evidence_path: Path | None = None) -> tuple[dict[str, object], Transcript]:
+    try:
+        raw = _read_json_file(path, "INVALID_TRANSCRIPT_FILE")
         payload = ImportInput.model_validate(raw)
+        transcript_payload = payload.model_dump(exclude={"evidence"})
+        manifest = payload.evidence
+        if evidence_path is not None:
+            if manifest is not None:
+                raise SmokeFailure("DUPLICATE_EVIDENCE_INPUT")
+            manifest = _read_json_file(evidence_path, "INVALID_EVIDENCE_FILE")
+        if manifest is not None:
+            validated = parse_manifest(manifest, transcript_payload)
+            payload = ImportInput.model_validate({**transcript_payload, "evidence": asdict(validated)})
         transcript = Transcript(
             video_id=payload.video_id, source=payload.source, language=payload.language,
             segments=tuple(Segment(**item.model_dump()) for item in payload.segments),
         )
-    except (ValueError, TypeError, UnicodeError):
-        raise SmokeFailure("INVALID_TRANSCRIPT") from None
-    except OSError:
-        raise SmokeFailure("INVALID_TRANSCRIPT_FILE") from None
+    except SmokeFailure:
+        raise
+    except (CaptionEvidenceError, ValueError, TypeError, UnicodeError):
+        raise SmokeFailure("INVALID_TRANSCRIPT_OR_EVIDENCE") from None
     return payload.model_dump(), transcript
 
 
@@ -50,7 +67,6 @@ def call(base: str, method: str, route: str, body: dict | None = None) -> dict:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = Request(base + route, method=method, data=data, headers=headers)
-    # The only permitted host is an explicit numeric loopback. Never honor proxies.
     opener = build_opener(ProxyHandler({}))
     try:
         with opener.open(request, timeout=8.0) as response:
@@ -60,7 +76,6 @@ def call(base: str, method: str, route: str, body: dict | None = None) -> dict:
     except HTTPError as exc:
         raise SmokeFailure(f"HTTP_{exc.code}") from None
     except (URLError, TimeoutError, OSError):
-        # POST may have been accepted despite a transport error. Never submit again.
         raise SmokeFailure("TRANSPORT_OUTCOME_UNKNOWN_DO_NOT_RESUBMIT") from None
     if len(content) > MAX_RESPONSE:
         raise SmokeFailure("RESPONSE_TOO_LARGE")
@@ -73,8 +88,25 @@ def call(base: str, method: str, route: str, body: dict | None = None) -> dict:
     return result
 
 
+def verify_provenance(result: dict, expect_evidence: bool) -> None:
+    provenance = result.get("provenance")
+    if (not isinstance(provenance, dict)
+            or provenance.get("evidence_present") is not expect_evidence
+            or provenance.get("authorization_status") != "UNVERIFIED"
+            or provenance.get("video_identity_status") != "UNVERIFIED"
+            or provenance.get("timeline_match_status") != "UNVERIFIED"
+            or provenance.get("deep_links_allowed") is not False):
+        raise SmokeFailure("INVALID_PROVENANCE_STATE")
+    if expect_evidence:
+        if provenance.get("evidence_schema") != 2:
+            raise SmokeFailure("INVALID_PROVENANCE_STATE")
+    elif provenance.get("evidence_schema") is not None:
+        raise SmokeFailure("INVALID_PROVENANCE_STATE")
+
+
 def verify_sections(result: dict, transcript: Transcript, job_id: str, planned: int,
-                    provider: str, model: str) -> int:
+                    provider: str, model: str, expect_evidence: bool = False) -> int:
+    verify_provenance(result, expect_evidence)
     sections = result.get("sections")
     if (result.get("job_id") != job_id or result.get("complete") is not True
             or result.get("result_kind") != "SECTIONS_ONLY"
@@ -119,7 +151,9 @@ def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
             or not configuration["model"].strip()
             or configuration.get("result_kind") != "SECTIONS_ONLY"):
         raise SmokeFailure("PROVIDER_CONFIGURATION_MISMATCH")
+    expect_evidence = payload.get("evidence") is not None
     created = request(base, "POST", "/api/jobs", payload)
+    verify_provenance(created, expect_evidence)
     job_id = created.get("id")
     if not isinstance(job_id, str) or JOB_ID.fullmatch(job_id) is None:
         raise SmokeFailure("UNKNOWN_SUBMISSION_OUTCOME_DO_NOT_RESUBMIT")
@@ -129,6 +163,7 @@ def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
         job = request(base, "GET", f"/api/jobs/{job_id}")
         if job.get("id") != job_id:
             raise SmokeFailure("INVALID_JOB_RESPONSE")
+        verify_provenance(job, expect_evidence)
         state = job.get("state")
         if state in TERMINAL:
             break
@@ -138,19 +173,20 @@ def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
             raise SmokeFailure(f"POLL_TIMEOUT_JOB_{job_id}_DO_NOT_RESUBMIT")
         pause(0.5)
     if state != "COMPLETED":
-        # Safe machine code only, never raw provider response.
         raise SmokeFailure(f"JOB_{state}_CHECK_STATUS_{job_id}")
     planned = job.get("planned_sections")
     if type(planned) is not int or not 1 <= planned <= 64:
         raise SmokeFailure("INVALID_SECTION_COUNT")
     sections = request(base, "GET", f"/api/jobs/{job_id}/sections")
     return job_id, verify_sections(sections, transcript, job_id, planned,
-                                   provider, configuration["model"])
+                                   provider, configuration["model"], expect_evidence)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Local, explicit analysis smoke test")
     parser.add_argument("--transcript", type=Path, required=True)
+    parser.add_argument("--evidence", type=Path,
+                        help="Optional local caption-evidence sidecar; validated before any HTTP")
     parser.add_argument("--submit", action="store_true", help="Allow ONE job submission to selected provider")
     parser.add_argument("--confirm-provider-upload", action="store_true",
                         help="Acknowledge the transcript may leave your computer and consume quota")
@@ -159,8 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-wait-seconds", type=int, default=180)
     args = parser.parse_args(argv)
     try:
-        payload, transcript = load_fixture(args.transcript)
+        payload, transcript = load_fixture(args.transcript, args.evidence)
+        has_evidence = payload.get("evidence") is not None
         print(f"Pré-validação local: {len(transcript.segments)} segmentos; nenhum texto exibido.")
+        if has_evidence:
+            print("Manifesto de proveniência validado localmente; vídeo/sincronização continuam NÃO verificados.")
         if not args.submit:
             if args.confirm_provider_upload or args.expect_provider:
                 raise SmokeFailure("SUBMISSION_FLAG_REQUIRED")
@@ -175,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                                 payload=payload, transcript=transcript,
                                 max_wait_seconds=args.max_wait_seconds)
         print(f"Concluído: {count} seção(ões) com cobertura estrutural dos segmentos; job {job_id}.")
-        print("Resultado SECTIONS_ONLY; veracidade e síntese global não comprovadas.")
+        print("Resultado SECTIONS_ONLY; veracidade, síntese global e deep links não comprovados.")
         return 0
     except SmokeFailure as exc:
         print(f"Smoke test: {exc}", file=sys.stderr)
