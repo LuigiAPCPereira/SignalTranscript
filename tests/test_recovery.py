@@ -11,6 +11,7 @@ from unittest.mock import patch
 from signaltranscript.backend.backup import BackupError, backup_sqlite
 from signaltranscript.backend.recovery import (
     RecoveryReceipt,
+    load_recovery_receipt,
     main,
     save_recovery_receipt,
     stage_verified_recovery,
@@ -136,7 +137,9 @@ class SQLiteRecoveryTests(unittest.TestCase):
         save_recovery_receipt(receipt_path, receipt)
         self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(receipt_path.read_bytes(), (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode())
-        verify_recovery_receipt(self.snapshot, destination, RecoveryReceipt.from_dict(json.loads(receipt_path.read_text())))
+        loaded = load_recovery_receipt(receipt_path)
+        self.assertEqual(loaded, receipt)
+        verify_recovery_receipt(self.snapshot, destination, loaded)
 
     def test_saved_receipt_never_overwrites_existing_evidence(self):
         destination = self.root / "receipt-existing-staged.db"
@@ -158,6 +161,25 @@ class SQLiteRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_EXISTS"):
             save_recovery_receipt(link, receipt)
         self.assertEqual(protected.read_bytes(), b"keep")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_receipt_loader_refuses_symlink_even_to_valid_receipt(self):
+        destination = self.root / "loader-link-staged.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        real_receipt = self.root / "loader-real.json"
+        save_recovery_receipt(real_receipt, receipt)
+        link = self.root / "loader-link.json"
+        link.symlink_to(real_receipt)
+        with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
+            load_recovery_receipt(link)
+
+    def test_receipt_loader_refuses_directory_and_oversized_input(self):
+        with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
+            load_recovery_receipt(self.root)
+        oversized = self.root / "oversized-receipt.json"
+        oversized.write_bytes(b" " * (16 * 1024 + 1))
+        with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
+            load_recovery_receipt(oversized)
 
     def test_cli_stages_snapshot_and_prints_receipt_json(self):
         destination = self.root / "cli-staged.db"
