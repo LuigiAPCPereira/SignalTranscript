@@ -1,8 +1,9 @@
 """Offline SQLite backup primitives for the local SignalTranscript store.
 
-This module never uploads data and never overwrites an existing backup. It uses
-SQLite's online backup API instead of copying database/WAL files independently.
-A completed snapshot is published atomically only after its integrity check.
+This module never uploads data and never overwrites an existing database or
+backup. It uses SQLite's online backup API instead of copying database/WAL
+files independently. Completed snapshots/restores are published atomically
+only after their integrity check.
 """
 
 import argparse
@@ -42,34 +43,23 @@ def verify_sqlite_backup(path: Path) -> Path:
     path = Path(path)
     db = _open_verified_readonly(path)
     try:
-        # query_only is defensive documentation of the contract in addition to
-        # mode=ro: verification must never become a migration/repair operation.
         db.execute("PRAGMA query_only = ON")
     finally:
         db.close()
     return path
 
 
-def backup_sqlite(source: Path, destination: Path) -> Path:
-    """Create one consistent SQLite snapshot without replacing existing data."""
-    source = Path(source)
+def _snapshot_to_new_file(source_db: sqlite3.Connection, destination: Path) -> Path:
+    """Copy an open SQLite source to a new atomically published private file."""
     destination = Path(destination)
-    if not source.exists() or not source.is_file() or source.is_symlink():
-        raise BackupError("SOURCE_NOT_REGULAR_FILE")
-    if source.resolve() == destination.resolve():
-        raise BackupError("DESTINATION_EQUALS_SOURCE")
     if destination.exists() or destination.is_symlink():
         raise BackupError("DESTINATION_EXISTS")
     if not destination.parent.exists() or not destination.parent.is_dir():
         raise BackupError("DESTINATION_PARENT_MISSING")
 
-    source_db = _open_verified_readonly(source)
     destination_db = None
     temporary: Path | None = None
     try:
-        # Build beside the destination so publication stays on one filesystem.
-        # mkstemp uses O_EXCL and mode 0600; the random file is never a valid
-        # advertised backup name while SQLite is still writing it.
         fd, raw_temporary = tempfile.mkstemp(
             prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
         )
@@ -79,13 +69,10 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
         source_db.backup(destination_db)
         integrity = destination_db.execute("PRAGMA integrity_check").fetchone()
         if integrity is None or integrity[0] != "ok":
-            raise sqlite3.DatabaseError("backup integrity check failed")
+            raise sqlite3.DatabaseError("snapshot integrity check failed")
         destination_db.close()
         destination_db = None
         os.chmod(temporary, 0o600)
-
-        # Hard-link publication is atomic and refuses to replace a destination
-        # that appeared after the preflight check. Then remove the private temp.
         try:
             os.link(temporary, destination)
         except FileExistsError as exc:
@@ -105,33 +92,77 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def backup_sqlite(source: Path, destination: Path) -> Path:
+    """Create one consistent SQLite snapshot without replacing existing data."""
+    source = Path(source)
+    destination = Path(destination)
+    if not source.exists() or not source.is_file() or source.is_symlink():
+        raise BackupError("SOURCE_NOT_REGULAR_FILE")
+    if source.resolve() == destination.resolve():
+        raise BackupError("DESTINATION_EQUALS_SOURCE")
+
+    source_db = _open_verified_readonly(source)
+    try:
+        return _snapshot_to_new_file(source_db, destination)
+    finally:
         source_db.close()
 
 
+def restore_sqlite_backup(snapshot: Path, destination: Path) -> Path:
+    """Stage a verified backup into a new database path without replacing data.
+
+    This intentionally does not swap an active database. The caller receives a
+    new private SQLite file that can be inspected before any separately
+    authorized cutover.
+    """
+    snapshot = Path(snapshot)
+    destination = Path(destination)
+    if snapshot.resolve() == destination.resolve():
+        raise BackupError("DESTINATION_EQUALS_SOURCE")
+    source_db = _open_verified_readonly(snapshot)
+    try:
+        restored = _snapshot_to_new_file(source_db, destination)
+    finally:
+        source_db.close()
+    verify_sqlite_backup(restored)
+    return restored
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Create or verify an explicit local backup without implicit mutation."""
-    parser = argparse.ArgumentParser(description="Create or verify a local SignalTranscript SQLite snapshot")
+    """Create, verify, or safely stage an explicit local backup."""
+    parser = argparse.ArgumentParser(
+        description="Create, verify, or stage a local SignalTranscript SQLite snapshot"
+    )
     parser.add_argument("--source", type=Path,
                         help="existing SQLite database to snapshot")
     parser.add_argument("--destination", type=Path,
-                        help="new backup path; existing files are never replaced")
+                        help="new path; existing files are never replaced")
     parser.add_argument("--verify", type=Path,
                         help="existing snapshot to verify read-only")
+    parser.add_argument("--restore", type=Path,
+                        help="verified snapshot to stage into a new database path")
     args = parser.parse_args(argv)
 
-    creating = args.source is not None or args.destination is not None
-    if args.verify is not None and creating:
-        parser.error("choose either backup creation or verification")
-    if args.verify is None and (args.source is None or args.destination is None):
+    modes = sum((args.source is not None, args.verify is not None, args.restore is not None))
+    if modes != 1:
+        parser.error("choose exactly one of backup creation, verification, or restore staging")
+    if args.source is not None and args.destination is None:
         parser.error("backup creation requires --source and --destination")
+    if args.restore is not None and args.destination is None:
+        parser.error("restore staging requires --restore and --destination")
+    if args.verify is not None and args.destination is not None:
+        parser.error("verification does not accept --destination")
 
     try:
         if args.verify is not None:
             verify_sqlite_backup(args.verify)
+        elif args.restore is not None:
+            restore_sqlite_backup(args.restore, args.destination)
         else:
             backup_sqlite(args.source, args.destination)
     except (BackupError, OSError):
-        # Keep paths and SQLite internals out of terminal/log output.
         parser.error("backup operation could not be completed safely")
     return 0
 
