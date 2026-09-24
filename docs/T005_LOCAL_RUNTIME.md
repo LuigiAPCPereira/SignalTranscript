@@ -20,13 +20,38 @@ Iniciar explicitamente com `python -m signaltranscript.backend.serve --analysis-
 
 Consultar `GET /api/jobs/{id}` e `GET /api/jobs/{id}/sections`. Se houver falha/interrupção, `POST /api/jobs/{id}/resume` é ato explícito: um timeout pode ter consumido recursos remotos. O resultado é `SECTIONS_ONLY`, nunca uma síntese global. Não há endpoints de aquisição de URL/áudio ou transcrição neste recorte.
 
+## Backup e recovery staging offline
+
+O caminho de recuperação é deliberadamente **não destrutivo**: ele nunca substitui automaticamente o banco ativo. Primeiro crie/inspecione um snapshot pelas primitivas de `signaltranscript.backend.backup`; para preparar uma recuperação, escolha um **novo** caminho de destino e execute:
+
+```bash
+python -m signaltranscript.backend.recovery \
+  --snapshot /caminho/backup.db \
+  --destination /caminho/restored-staging.db \
+  --expect-sha256 SHA256_DO_SNAPSHOT \
+  --receipt-out /caminho/restored-staging.receipt.json
+```
+
+A operação inspeciona a origem, fixa sua identidade por SHA-256, restaura para o novo banco usando o caminho SQLite verificado e só então emite um `RecoveryReceipt` schema v1. O receipt registra hashes da origem/destino, tamanho e metadados SQLite; quando persistido, usa arquivo privado `0600`, criação exclusiva e não segue symlink quando a plataforma oferece `O_NOFOLLOW`. Se a persistência do receipt falhar, o CLI tenta remover o banco staging criado por aquela invocação em vez de reportar sucesso parcial.
+
+Para auditar posteriormente o mesmo par sem modificá-lo:
+
+```bash
+python -m signaltranscript.backend.recovery \
+  --snapshot /caminho/backup.db \
+  --destination /caminho/restored-staging.db \
+  --verify-receipt /caminho/restored-staging.receipt.json
+```
+
+A leitura do receipt aceita somente arquivo regular pequeno, schema exato e versão conhecida; hashes/metadados impossíveis, versão futura, symlink, conteúdo excessivo ou divergência dos artefatos falham fechado. O comando de recovery **não é cutover**: não troca o banco usado pelo servidor, não sobrescreve destino, não implementa retenção/rotação, rollback de cutover nem política completa de disaster recovery. A decisão de substituir dados ativos permanece fora desta ferramenta.
+
 ## Garantias e pendências
 
 - O registro contém nome/modelo/revisão/orçamento. A revisão Groq é um SHA-256 do modelo, prompt, schema, limite de saída e modo estruturado. Alterações semânticas na lógica do adaptador que não estejam nesse material exigem revisão explícita do contrato; o hash não detecta tudo.
 - Jobs enfileirados com configuração diferente da instância atual são interrompidos **antes de chamar o provedor**, sem fallback. Checkpoints concluídos só são reutilizados quando a identidade e a transcrição/plano conferem.
 - O cliente do provedor é fechado no shutdown do FastAPI. Isso não garante cancelamento remoto nem execução exatamente uma vez.
-- Groq real, limites da conta, qualidade da análise, privacidade operacional, modelo local/NIM, backup/migração, cancelamento HTTP, aquisição e ponta a ponta com vídeo continuam não validados. T-005 e T-010 permanecem parciais; adoção documental v2.2 permanece parcial enquanto a fonte central estiver STAGING.
+- Groq real, limites da conta, qualidade da análise, privacidade operacional, modelo local/NIM, cutover/rollback de recuperação, retenção, cancelamento remoto, aquisição e ponta a ponta com vídeo continuam não validados. T-005 e T-010 permanecem parciais; adoção documental v2.2 permanece parcial enquanto a fonte central aprovada não estiver acessível.
 
 ## Verificação
 
-`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes `test_local_serve.py` usam injeção de fake e não fazem rede. Confirmar CI no HEAD final do PR; um CI anterior não valida commits posteriores.
+`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes de runtime/smoke/recovery são offline e não fazem chamada autenticada à Groq. O checkpoint de recovery no SHA `ec627014fe5e038cc74e5fc8d09516dd3e62d26a` passou no GitHub Actions 35989071501 em Python 3.12/3.13. Confirmar CI novamente no HEAD final do PR; um CI anterior não valida commits posteriores.
