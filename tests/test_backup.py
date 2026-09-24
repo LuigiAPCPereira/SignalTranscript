@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from signaltranscript.backend.backup import BackupError, backup_sqlite, main, verify_sqlite_backup
+from signaltranscript.backend.backup import (
+    BackupError,
+    backup_sqlite,
+    main,
+    restore_sqlite_backup,
+    verify_sqlite_backup,
+)
 
 
 class SQLiteBackupTests(unittest.TestCase):
@@ -80,6 +86,37 @@ class SQLiteBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(BackupError, "SOURCE_NOT_REGULAR_FILE"):
             verify_sqlite_backup(link)
 
+    def test_restore_stages_verified_snapshot_without_touching_active_database(self):
+        snapshot = self.root / "snapshot.db"
+        backup_sqlite(self.source, snapshot)
+        active_before = self.source.read_bytes()
+        restored = self.root / "restored.db"
+        self.assertEqual(restore_sqlite_backup(snapshot, restored), restored)
+        self.assertEqual(self.source.read_bytes(), active_before)
+        self.assertEqual(os.stat(restored).st_mode & 0o777, 0o600)
+        with sqlite3.connect(restored) as db:
+            self.assertEqual(db.execute("SELECT value FROM sample").fetchone()[0], "checkpoint")
+            self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+    def test_restore_refuses_overwrite_same_path_invalid_snapshot_and_symlink(self):
+        snapshot = self.root / "snapshot.db"
+        backup_sqlite(self.source, snapshot)
+        existing = self.root / "active.db"
+        existing.write_bytes(b"keep")
+        with self.assertRaisesRegex(BackupError, "DESTINATION_EXISTS"):
+            restore_sqlite_backup(snapshot, existing)
+        self.assertEqual(existing.read_bytes(), b"keep")
+        with self.assertRaisesRegex(BackupError, "DESTINATION_EQUALS_SOURCE"):
+            restore_sqlite_backup(snapshot, snapshot)
+        invalid = self.root / "invalid-restore.db"
+        invalid.write_bytes(b"not sqlite")
+        with self.assertRaisesRegex(BackupError, "SQLITE_VERIFICATION_FAILED"):
+            restore_sqlite_backup(invalid, self.root / "never.db")
+        link = self.root / "snapshot-link.db"
+        link.symlink_to(snapshot)
+        with self.assertRaisesRegex(BackupError, "SOURCE_NOT_REGULAR_FILE"):
+            restore_sqlite_backup(link, self.root / "never-link.db")
+
     def test_cli_requires_explicit_paths_and_creates_snapshot(self):
         target = self.root / "cli.backup.db"
         self.assertEqual(main(["--source", str(self.source), "--destination", str(target)]), 0)
@@ -93,12 +130,26 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertEqual(main(["--verify", str(target)]), 0)
         self.assertEqual(target.read_bytes(), before)
 
-    def test_cli_rejects_ambiguous_create_and_verify_modes(self):
+    def test_cli_can_stage_restore_to_new_path(self):
+        snapshot = self.root / "cli.snapshot.db"
+        backup_sqlite(self.source, snapshot)
+        restored = self.root / "cli.restored.db"
+        self.assertEqual(main(["--restore", str(snapshot), "--destination", str(restored)]), 0)
+        with sqlite3.connect(restored) as db:
+            self.assertEqual(db.execute("SELECT value FROM sample").fetchone()[0], "checkpoint")
+
+    def test_cli_rejects_ambiguous_modes(self):
         target = self.root / "ambiguous.db"
-        with patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
-            main(["--source", str(self.source), "--destination", str(target), "--verify", str(self.source)])
-        self.assertEqual(raised.exception.code, 2)
-        self.assertFalse(target.exists())
+        cases = (
+            ["--source", str(self.source), "--destination", str(target), "--verify", str(self.source)],
+            ["--source", str(self.source), "--destination", str(target), "--restore", str(self.source)],
+            ["--verify", str(self.source), "--destination", str(target)],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv), patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
+                main(argv)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertFalse(target.exists())
 
     def test_cli_failure_is_sanitized_and_does_not_overwrite(self):
         target = self.root / "existing.db"
