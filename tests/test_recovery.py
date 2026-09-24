@@ -54,10 +54,12 @@ class SQLiteRecoveryTests(unittest.TestCase):
         destination = self.root / "never.db"
         from signaltranscript.backend import recovery
         real_restore = recovery.restore_sqlite_backup
+
         def mutate_then_restore(snapshot, output, *, expected_sha256=None):
             with sqlite3.connect(snapshot) as db:
                 db.execute("INSERT INTO sample(value) VALUES ('changed')")
             return real_restore(snapshot, output, expected_sha256=expected_sha256)
+
         with patch("signaltranscript.backend.recovery.restore_sqlite_backup", side_effect=mutate_then_restore):
             with self.assertRaisesRegex(BackupError, "SNAPSHOT_HASH_MISMATCH"):
                 stage_verified_recovery(self.snapshot, destination)
@@ -110,6 +112,35 @@ class SQLiteRecoveryTests(unittest.TestCase):
         malformed["restored_size_bytes"] = True
         with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
             RecoveryReceipt.from_dict(malformed)
+
+    def test_receipt_parser_rejects_malformed_hashes_and_impossible_metadata(self):
+        destination = self.root / "receipt-invariants.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        valid = receipt.as_dict()
+        invalid_values = (
+            ("source_sha256", "g" * 64),
+            ("restored_sha256", "0" * 63),
+            ("restored_size_bytes", 0),
+            ("sqlite_user_version", -1),
+            ("sqlite_page_count", 0),
+            ("sqlite_page_size", 0),
+        )
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
+                    RecoveryReceipt.from_dict({**valid, field: value})
+
+    def test_receipt_parser_normalizes_valid_uppercase_hashes(self):
+        destination = self.root / "receipt-uppercase.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        parsed = RecoveryReceipt.from_dict(
+            {
+                **receipt.as_dict(),
+                "source_sha256": receipt.source_sha256.upper(),
+                "restored_sha256": receipt.restored_sha256.upper(),
+            }
+        )
+        self.assertEqual(parsed, receipt)
 
     def test_cli_stages_snapshot_and_prints_receipt_json(self):
         destination = self.root / "cli-staged.db"
