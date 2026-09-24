@@ -11,8 +11,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import string
 
 from .backup import BackupError, inspect_sqlite_backup, restore_sqlite_backup
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in string.hexdigits for character in value)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +40,12 @@ class RecoveryReceipt:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "RecoveryReceipt":
-        """Parse only the exact receipt schema; reject ambiguous/extended input."""
+        """Parse only a physically plausible exact receipt schema.
+
+        Receipts can be stored and supplied later, so parsing is deliberately
+        fail-closed: no extra fields, type coercion, malformed digests, negative
+        counters, or impossible zero-sized SQLite metadata are accepted.
+        """
         expected = {
             "source_sha256",
             "restored_sha256",
@@ -45,23 +59,31 @@ class RecoveryReceipt:
         try:
             source_sha256 = value["source_sha256"]
             restored_sha256 = value["restored_sha256"]
+            restored_size_bytes = value["restored_size_bytes"]
+            sqlite_user_version = value["sqlite_user_version"]
+            sqlite_page_count = value["sqlite_page_count"]
+            sqlite_page_size = value["sqlite_page_size"]
             integers = (
-                value["restored_size_bytes"],
-                value["sqlite_user_version"],
-                value["sqlite_page_count"],
-                value["sqlite_page_size"],
+                restored_size_bytes,
+                sqlite_user_version,
+                sqlite_page_count,
+                sqlite_page_size,
             )
-            if not isinstance(source_sha256, str) or not isinstance(restored_sha256, str):
+            if not _is_sha256(source_sha256) or not _is_sha256(restored_sha256):
                 raise TypeError
             if any(type(item) is not int for item in integers):
                 raise TypeError
+            if restored_size_bytes <= 0 or sqlite_user_version < 0:
+                raise ValueError
+            if sqlite_page_count <= 0 or sqlite_page_size <= 0:
+                raise ValueError
             return cls(
-                source_sha256=source_sha256,
-                restored_sha256=restored_sha256,
-                restored_size_bytes=integers[0],
-                sqlite_user_version=integers[1],
-                sqlite_page_count=integers[2],
-                sqlite_page_size=integers[3],
+                source_sha256=source_sha256.lower(),
+                restored_sha256=restored_sha256.lower(),
+                restored_size_bytes=restored_size_bytes,
+                sqlite_user_version=sqlite_user_version,
+                sqlite_page_count=sqlite_page_count,
+                sqlite_page_size=sqlite_page_size,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise BackupError("RECOVERY_RECEIPT_INVALID") from exc
