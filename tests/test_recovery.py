@@ -1,6 +1,7 @@
 from contextlib import redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -11,6 +12,7 @@ from signaltranscript.backend.backup import BackupError, backup_sqlite
 from signaltranscript.backend.recovery import (
     RecoveryReceipt,
     main,
+    save_recovery_receipt,
     stage_verified_recovery,
     verify_recovery_receipt,
 )
@@ -142,6 +144,39 @@ class SQLiteRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(parsed, receipt)
 
+    def test_saved_receipt_is_private_canonical_and_verifiable(self):
+        destination = self.root / "receipt-staged.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        receipt_path = self.root / "recovery.json"
+        save_recovery_receipt(receipt_path, receipt)
+        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            receipt_path.read_bytes(),
+            (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        )
+        verify_recovery_receipt(self.snapshot, destination, RecoveryReceipt.from_dict(json.loads(receipt_path.read_text())))
+
+    def test_saved_receipt_never_overwrites_existing_evidence(self):
+        destination = self.root / "receipt-existing-staged.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        receipt_path = self.root / "existing-receipt.json"
+        receipt_path.write_bytes(b"keep")
+        with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_EXISTS"):
+            save_recovery_receipt(receipt_path, receipt)
+        self.assertEqual(receipt_path.read_bytes(), b"keep")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_saved_receipt_refuses_existing_symlink(self):
+        destination = self.root / "receipt-link-staged.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        protected = self.root / "protected.txt"
+        protected.write_bytes(b"keep")
+        link = self.root / "receipt-link.json"
+        link.symlink_to(protected)
+        with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_EXISTS"):
+            save_recovery_receipt(link, receipt)
+        self.assertEqual(protected.read_bytes(), b"keep")
+
     def test_cli_stages_snapshot_and_prints_receipt_json(self):
         destination = self.root / "cli-staged.db"
         output = io.StringIO()
@@ -153,6 +188,28 @@ class SQLiteRecoveryTests(unittest.TestCase):
         self.assertEqual(len(receipt["source_sha256"]), 64)
         self.assertEqual(len(receipt["restored_sha256"]), 64)
         self.assertTrue(destination.exists())
+
+    def test_cli_can_persist_receipt_without_overwrite(self):
+        destination = self.root / "cli-receipt-staged.db"
+        receipt_path = self.root / "cli-receipt.json"
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = main([
+                "--snapshot", str(self.snapshot),
+                "--destination", str(destination),
+                "--receipt-out", str(receipt_path),
+            ])
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue()), json.loads(receipt_path.read_text()))
+        before = receipt_path.read_bytes()
+        second_destination = self.root / "cli-receipt-second.db"
+        with self.assertRaises(SystemExit):
+            main([
+                "--snapshot", str(self.snapshot),
+                "--destination", str(second_destination),
+                "--receipt-out", str(receipt_path),
+            ])
+        self.assertEqual(receipt_path.read_bytes(), before)
 
     def test_cli_hash_mismatch_exits_without_destination(self):
         destination = self.root / "cli-never.db"
@@ -182,6 +239,19 @@ class SQLiteRecoveryTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             main(["--snapshot", str(self.snapshot), "--destination", str(destination), "--verify-receipt", str(receipt_path)])
         self.assertEqual(destination.read_bytes(), before)
+
+    def test_cli_rejects_receipt_out_during_verification(self):
+        destination = self.root / "cli-verify-exclusive.db"
+        receipt = stage_verified_recovery(self.snapshot, destination)
+        receipt_path = self.root / "verify-exclusive.json"
+        receipt_path.write_text(json.dumps(receipt.as_dict()), encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            main([
+                "--snapshot", str(self.snapshot),
+                "--destination", str(destination),
+                "--verify-receipt", str(receipt_path),
+                "--receipt-out", str(self.root / "never.json"),
+            ])
 
 
 if __name__ == "__main__":
