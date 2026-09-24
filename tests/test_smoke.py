@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from signaltranscript.ai.ports import Analysis, Idea, Transcript
+from signaltranscript.ai.ports import Analysis, Idea, Segment, Transcript
 from signaltranscript.backend.caption_evidence import canonical_transcript_sha256
 from signaltranscript.backend.serve import AnalysisRegistration, build_app
 from signaltranscript.backend.smoke import (
@@ -70,11 +70,11 @@ class SmokeTests(unittest.TestCase):
                 response = client.request(method, route, json=body)
                 self.assertIn(response.status_code, (200, 202), response.text)
                 return response.json()
-            job_id, count = execute(port=8765, provider="fake", payload=payload,
-                                    transcript=transcript, max_wait_seconds=10,
-                                    request=request, pause=lambda _: time.sleep(.01))
+            job_id, verification = execute(port=8765, provider="fake", payload=payload,
+                                           transcript=transcript, max_wait_seconds=10,
+                                           request=request, pause=lambda _: time.sleep(.01))
             self.assertTrue(job_id)
-            self.assertEqual(count, 1)
+            self.assertEqual(verification.section_count, 1)
         self.assertEqual(fake.calls, 1)
 
         changed = json.loads(self.path.read_text())
@@ -131,6 +131,30 @@ class SmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(SmokeFailure, "INCOMPLETE_SEGMENT_COVERAGE"):
             verify_sections(result, self.transcript, "job-1", 1, "fake", "example-model")
 
+    def test_verification_reports_reference_positions_without_promoting_summary(self):
+        source = Transcript(
+            video_id="synthetic", source="manual_import", language="pt",
+            segments=tuple(Segment(f"s{i}", f"texto {i}", i, i + 1) for i in range(9)),
+        )
+        sections = []
+        for index, ids, refs in (
+            (0, ["s0", "s1", "s2"], ["s0"]),
+            (1, ["s3", "s4", "s5"], ["s4"]),
+            (2, ["s6", "s7", "s8"], ["s8"]),
+        ):
+            sections.append({"index": index, "segment_ids": ids,
+                             "analysis": {"summary": f"sum {index}",
+                                          "ideas": [{"source_segment_ids": refs}],
+                                          "provider": "fake", "model": "example-model"}})
+        result = {"job_id": "job-1", "complete": True, "result_kind": "SECTIONS_ONLY",
+                  "planned_sections": 3, "sections": sections, "provenance": provenance()}
+
+        verification = verify_sections(result, source, "job-1", 3, "fake", "example-model")
+
+        self.assertEqual(verification.section_count, 3)
+        self.assertTrue(verification.positional_coverage.spans_all_positions)
+        self.assertEqual(verification.positional_coverage.referenced_segments, 3)
+
     def test_end_to_end_http_with_fake_provider(self):
         fake = FakeAnalysis()
         db_path = Path(self.tmp.name) / "jobs.db"
@@ -141,10 +165,11 @@ class SmokeTests(unittest.TestCase):
                 response = client.request(method, route, json=body)
                 self.assertIn(response.status_code, (200, 202), response.text)
                 return response.json()
-            job_id, count = execute(port=8765, provider="fake", payload=self.payload,
-                                    transcript=self.transcript, max_wait_seconds=10,
-                                    request=request, pause=lambda _: time.sleep(.01))
-            self.assertEqual(count, 1)
+            job_id, verification = execute(port=8765, provider="fake", payload=self.payload,
+                                           transcript=self.transcript, max_wait_seconds=10,
+                                           request=request, pause=lambda _: time.sleep(.01))
+            self.assertEqual(verification.section_count, 1)
+            self.assertFalse(verification.positional_coverage.spans_all_positions)
             self.assertTrue(job_id)
             self.assertEqual(fake.calls, 1)
 
