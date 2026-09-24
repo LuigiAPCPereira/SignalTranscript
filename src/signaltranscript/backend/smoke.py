@@ -5,7 +5,7 @@ resume, fallback or recording of transcribed text in CLI output.
 """
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
@@ -14,6 +14,9 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
+from signaltranscript.ai.coverage import (
+    CoverageValidationError, PositionalCoverage, assess_reference_positions,
+)
 from signaltranscript.ai.ports import Segment, Transcript
 from signaltranscript.backend.api import ImportInput
 from signaltranscript.backend.caption_evidence import CaptionEvidenceError, parse_manifest
@@ -25,6 +28,12 @@ MAX_RESPONSE = 512_000
 
 class SmokeFailure(Exception):
     """An operational error safe to show without echoing transcript or keys."""
+
+
+@dataclass(frozen=True, slots=True)
+class SmokeVerification:
+    section_count: int
+    positional_coverage: PositionalCoverage
 
 
 def _read_json_file(path: Path, code: str) -> object:
@@ -105,7 +114,7 @@ def verify_provenance(result: dict, expect_evidence: bool) -> None:
 
 
 def verify_sections(result: dict, transcript: Transcript, job_id: str, planned: int,
-                    provider: str, model: str, expect_evidence: bool = False) -> int:
+                    provider: str, model: str, expect_evidence: bool = False) -> SmokeVerification:
     verify_provenance(result, expect_evidence)
     sections = result.get("sections")
     if (result.get("job_id") != job_id or result.get("complete") is not True
@@ -113,8 +122,8 @@ def verify_sections(result: dict, transcript: Transcript, job_id: str, planned: 
             or result.get("planned_sections") != planned
             or not isinstance(sections, list) or len(sections) != planned):
         raise SmokeFailure("INCOMPLETE_OR_INVALID_SECTIONS")
-    expected = [segment.id for segment in transcript.segments]
-    covered: list[str] = []
+    section_ids: list[tuple[str, ...]] = []
+    references: list[str] = []
     for index, section in enumerate(sections):
         if not isinstance(section, dict) or section.get("index") != index:
             raise SmokeFailure("INVALID_SECTION_ORDER")
@@ -136,14 +145,19 @@ def verify_sections(result: dict, transcript: Transcript, job_id: str, planned: 
                     or not idea["source_segment_ids"]
                     or any(ref not in allowed for ref in idea["source_segment_ids"])):
                 raise SmokeFailure("INVALID_EVIDENCE_REFERENCES")
-        covered.extend(segment_ids)
-    if covered != expected:
-        raise SmokeFailure("INCOMPLETE_SEGMENT_COVERAGE")
-    return len(sections)
+            references.extend(idea["source_segment_ids"])
+        section_ids.append(tuple(segment_ids))
+    try:
+        coverage = assess_reference_positions(transcript, section_ids, references)
+    except CoverageValidationError as exc:
+        if exc.code == "SECTION_COVERAGE_MISMATCH":
+            raise SmokeFailure("INCOMPLETE_SEGMENT_COVERAGE") from None
+        raise SmokeFailure(f"INVALID_POSITIONAL_EVIDENCE_{exc.code}") from None
+    return SmokeVerification(len(sections), coverage)
 
 
 def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
-            max_wait_seconds: int, request=call, pause=time.sleep) -> tuple[str, int]:
+            max_wait_seconds: int, request=call, pause=time.sleep) -> tuple[str, SmokeVerification]:
     base = f"http://127.0.0.1:{port}"
     configuration = request(base, "GET", "/api/config")
     if (configuration.get("analysis_provider") != provider
@@ -210,11 +224,17 @@ def main(argv: list[str] | None = None) -> int:
                 or not 1 <= args.port <= 65535
                 or not 1 <= args.max_wait_seconds <= 3600):
             raise SmokeFailure("INVALID_EXPLICIT_SUBMISSION_OPTIONS")
-        job_id, count = execute(port=args.port, provider=args.expect_provider,
-                                payload=payload, transcript=transcript,
-                                max_wait_seconds=args.max_wait_seconds)
-        print(f"Concluído: {count} seção(ões) com cobertura estrutural dos segmentos; job {job_id}.")
-        print("Resultado SECTIONS_ONLY; veracidade, síntese global e deep links não comprovados.")
+        job_id, verification = execute(port=args.port, provider=args.expect_provider,
+                                       payload=payload, transcript=transcript,
+                                       max_wait_seconds=args.max_wait_seconds)
+        print(f"Concluído: {verification.section_count} seção(ões) com cobertura estrutural dos segmentos; job {job_id}.")
+        coverage = verification.positional_coverage
+        print("Cobertura posicional das referências: "
+              f"início={'sim' if coverage.beginning_referenced else 'não'}, "
+              f"meio={'sim' if coverage.middle_referenced else 'não'}, "
+              f"fim={'sim' if coverage.end_referenced else 'não'}; "
+              f"{coverage.referenced_segments}/{coverage.total_segments} segmentos referenciados.")
+        print("Resultado SECTIONS_ONLY; cobertura posicional não é síntese global, prova semântica, factualidade ou deep link.")
         return 0
     except SmokeFailure as exc:
         print(f"Smoke test: {exc}", file=sys.stderr)
