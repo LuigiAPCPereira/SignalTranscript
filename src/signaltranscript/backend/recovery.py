@@ -10,6 +10,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
 import string
 
@@ -141,6 +142,38 @@ def verify_recovery_receipt(
         raise BackupError("RECOVERY_RECEIPT_MISMATCH")
 
 
+def _receipt_bytes(receipt: RecoveryReceipt) -> bytes:
+    return (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def save_recovery_receipt(path: Path, receipt: RecoveryReceipt) -> Path:
+    """Persist a private receipt without following links or overwriting evidence."""
+    target = Path(path)
+    if not target.parent.is_dir():
+        raise BackupError("RECOVERY_RECEIPT_DESTINATION_INVALID")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(target, flags, 0o600)
+    except FileExistsError as exc:
+        raise BackupError("RECOVERY_RECEIPT_EXISTS") from exc
+    except OSError as exc:
+        raise BackupError("RECOVERY_RECEIPT_WRITE_FAILED") from exc
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(_receipt_bytes(receipt))
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise BackupError("RECOVERY_RECEIPT_WRITE_FAILED") from exc
+    return target
+
+
 def _load_receipt(path: Path) -> RecoveryReceipt:
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -160,10 +193,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--destination", required=True, type=Path, help="staged database path")
     parser.add_argument("--expect-sha256", help="optional exact SHA-256 required before staging")
     parser.add_argument("--verify-receipt", type=Path, help="read-only verification of a prior receipt JSON")
+    parser.add_argument("--receipt-out", type=Path, help="persist a new private receipt without overwrite")
     args = parser.parse_args(argv)
 
     if args.verify_receipt is not None and args.expect_sha256 is not None:
         parser.error("--expect-sha256 is only valid while staging")
+    if args.verify_receipt is not None and args.receipt_out is not None:
+        parser.error("--receipt-out is only valid while staging")
 
     try:
         if args.verify_receipt is not None:
@@ -175,6 +211,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.destination,
                 expected_sha256=args.expect_sha256,
             )
+            if args.receipt_out is not None:
+                save_recovery_receipt(args.receipt_out, receipt)
     except (BackupError, OSError):
         parser.error("recovery operation could not be completed safely")
 
