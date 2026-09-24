@@ -1,3 +1,4 @@
+from hashlib import sha256
 import os
 from pathlib import Path
 import sqlite3
@@ -76,6 +77,16 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertEqual(verify_sqlite_backup(target), target)
         self.assertEqual(target.read_bytes(), before)
 
+    def test_verify_can_pin_exact_snapshot_hash(self):
+        target = self.root / "pinned.db"
+        backup_sqlite(self.source, target)
+        expected = sha256(target.read_bytes()).hexdigest()
+        self.assertEqual(verify_sqlite_backup(target, expected_sha256=expected.upper()), target)
+        with self.assertRaisesRegex(BackupError, "SNAPSHOT_HASH_MISMATCH"):
+            verify_sqlite_backup(target, expected_sha256="0" * 64)
+        with self.assertRaisesRegex(BackupError, "EXPECTED_SHA256_INVALID"):
+            verify_sqlite_backup(target, expected_sha256="not-a-digest")
+
     def test_verify_rejects_invalid_file_and_symlink(self):
         invalid = self.root / "invalid.db"
         invalid.write_bytes(b"not sqlite")
@@ -97,6 +108,21 @@ class SQLiteBackupTests(unittest.TestCase):
         with sqlite3.connect(restored) as db:
             self.assertEqual(db.execute("SELECT value FROM sample").fetchone()[0], "checkpoint")
             self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+    def test_restore_can_require_exact_snapshot_hash(self):
+        snapshot = self.root / "restore-pinned.db"
+        backup_sqlite(self.source, snapshot)
+        expected = sha256(snapshot.read_bytes()).hexdigest()
+        restored = self.root / "restore-pinned-output.db"
+        self.assertEqual(
+            restore_sqlite_backup(snapshot, restored, expected_sha256=expected), restored
+        )
+        wrong_destination = self.root / "wrong-hash-output.db"
+        with self.assertRaisesRegex(BackupError, "SNAPSHOT_HASH_MISMATCH"):
+            restore_sqlite_backup(
+                snapshot, wrong_destination, expected_sha256="f" * 64
+            )
+        self.assertFalse(wrong_destination.exists())
 
     def test_restore_refuses_overwrite_same_path_invalid_snapshot_and_symlink(self):
         snapshot = self.root / "snapshot.db"
@@ -130,6 +156,24 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertEqual(main(["--verify", str(target)]), 0)
         self.assertEqual(target.read_bytes(), before)
 
+    def test_cli_can_verify_and_restore_with_pinned_hash(self):
+        snapshot = self.root / "cli.pinned.db"
+        backup_sqlite(self.source, snapshot)
+        expected = sha256(snapshot.read_bytes()).hexdigest()
+        self.assertEqual(
+            main(["--verify", str(snapshot), "--expect-sha256", expected]), 0
+        )
+        restored = self.root / "cli.pinned.restored.db"
+        self.assertEqual(
+            main([
+                "--restore", str(snapshot), "--destination", str(restored),
+                "--expect-sha256", expected,
+            ]),
+            0,
+        )
+        with sqlite3.connect(restored) as db:
+            self.assertEqual(db.execute("SELECT value FROM sample").fetchone()[0], "checkpoint")
+
     def test_cli_can_stage_restore_to_new_path(self):
         snapshot = self.root / "cli.snapshot.db"
         backup_sqlite(self.source, snapshot)
@@ -144,6 +188,7 @@ class SQLiteBackupTests(unittest.TestCase):
             ["--source", str(self.source), "--destination", str(target), "--verify", str(self.source)],
             ["--source", str(self.source), "--destination", str(target), "--restore", str(self.source)],
             ["--verify", str(self.source), "--destination", str(target)],
+            ["--source", str(self.source), "--destination", str(target), "--expect-sha256", "0" * 64],
         )
         for argv in cases:
             with self.subTest(argv=argv), patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
