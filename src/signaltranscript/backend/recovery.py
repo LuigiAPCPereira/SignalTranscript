@@ -19,6 +19,7 @@ from .backup import BackupError, inspect_sqlite_backup, restore_sqlite_backup
 
 
 _MAX_RECEIPT_BYTES = 16 * 1024
+_RECOVERY_RECEIPT_SCHEMA_VERSION = 1
 
 
 def _is_sha256(value: object) -> bool:
@@ -33,6 +34,7 @@ def _is_sha256(value: object) -> bool:
 class RecoveryReceipt:
     """Verified identities for one non-destructive restore-staging operation."""
 
+    schema_version: int
     source_sha256: str
     restored_sha256: str
     restored_size_bytes: int
@@ -45,8 +47,9 @@ class RecoveryReceipt:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "RecoveryReceipt":
-        """Parse only a physically plausible exact receipt schema."""
+        """Parse only the current, physically plausible exact receipt schema."""
         expected = {
+            "schema_version",
             "source_sha256",
             "restored_sha256",
             "restored_size_bytes",
@@ -57,22 +60,26 @@ class RecoveryReceipt:
         if set(value) != expected:
             raise BackupError("RECOVERY_RECEIPT_INVALID")
         try:
+            schema_version = value["schema_version"]
             source_sha256 = value["source_sha256"]
             restored_sha256 = value["restored_sha256"]
             restored_size_bytes = value["restored_size_bytes"]
             sqlite_user_version = value["sqlite_user_version"]
             sqlite_page_count = value["sqlite_page_count"]
             sqlite_page_size = value["sqlite_page_size"]
-            integers = (restored_size_bytes, sqlite_user_version, sqlite_page_count, sqlite_page_size)
-            if not _is_sha256(source_sha256) or not _is_sha256(restored_sha256):
-                raise TypeError
+            integers = (schema_version, restored_size_bytes, sqlite_user_version, sqlite_page_count, sqlite_page_size)
             if any(type(item) is not int for item in integers):
+                raise TypeError
+            if schema_version != _RECOVERY_RECEIPT_SCHEMA_VERSION:
+                raise ValueError
+            if not _is_sha256(source_sha256) or not _is_sha256(restored_sha256):
                 raise TypeError
             if restored_size_bytes <= 0 or sqlite_user_version < 0:
                 raise ValueError
             if sqlite_page_count <= 0 or sqlite_page_size <= 0:
                 raise ValueError
             return cls(
+                schema_version=schema_version,
                 source_sha256=source_sha256.lower(),
                 restored_sha256=restored_sha256.lower(),
                 restored_size_bytes=restored_size_bytes,
@@ -91,6 +98,7 @@ def stage_verified_recovery(snapshot: Path, destination: Path, *, expected_sha25
     restored = restore_sqlite_backup(Path(snapshot), Path(destination), expected_sha256=source_sha256)
     result = inspect_sqlite_backup(restored)
     return RecoveryReceipt(
+        schema_version=_RECOVERY_RECEIPT_SCHEMA_VERSION,
         source_sha256=source_sha256,
         restored_sha256=str(result["sha256"]),
         restored_size_bytes=int(result["size_bytes"]),
@@ -101,10 +109,13 @@ def stage_verified_recovery(snapshot: Path, destination: Path, *, expected_sha25
 
 
 def verify_recovery_receipt(snapshot: Path, destination: Path, receipt: RecoveryReceipt) -> None:
-    """Verify that a receipt still describes the exact source and staged DB."""
+    """Verify that a current-version receipt still describes the exact source and staged DB."""
+    if receipt.schema_version != _RECOVERY_RECEIPT_SCHEMA_VERSION:
+        raise BackupError("RECOVERY_RECEIPT_INVALID")
     source = inspect_sqlite_backup(Path(snapshot), expected_sha256=receipt.source_sha256)
     restored = inspect_sqlite_backup(Path(destination), expected_sha256=receipt.restored_sha256)
     observed = RecoveryReceipt(
+        schema_version=_RECOVERY_RECEIPT_SCHEMA_VERSION,
         source_sha256=str(source["sha256"]),
         restored_sha256=str(restored["sha256"]),
         restored_size_bytes=int(restored["size_bytes"]),
@@ -121,7 +132,9 @@ def _receipt_bytes(receipt: RecoveryReceipt) -> bytes:
 
 
 def save_recovery_receipt(path: Path, receipt: RecoveryReceipt) -> Path:
-    """Persist a private receipt without following links or overwriting evidence."""
+    """Persist a private current-version receipt without following links or overwriting evidence."""
+    if receipt.schema_version != _RECOVERY_RECEIPT_SCHEMA_VERSION:
+        raise BackupError("RECOVERY_RECEIPT_INVALID")
     target = Path(path)
     if not target.parent.is_dir():
         raise BackupError("RECOVERY_RECEIPT_DESTINATION_INVALID")
@@ -149,7 +162,7 @@ def save_recovery_receipt(path: Path, receipt: RecoveryReceipt) -> Path:
 
 
 def load_recovery_receipt(path: Path) -> RecoveryReceipt:
-    """Load a small regular receipt without following symlinks or special files."""
+    """Load a small regular current-version receipt without following symlinks or special files."""
     target = Path(path)
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
