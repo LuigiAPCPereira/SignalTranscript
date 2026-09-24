@@ -56,12 +56,10 @@ class SQLiteRecoveryTests(unittest.TestCase):
         destination = self.root / "never.db"
         from signaltranscript.backend import recovery
         real_restore = recovery.restore_sqlite_backup
-
         def mutate_then_restore(snapshot, output, *, expected_sha256=None):
             with sqlite3.connect(snapshot) as db:
                 db.execute("INSERT INTO sample(value) VALUES ('changed')")
             return real_restore(snapshot, output, expected_sha256=expected_sha256)
-
         with patch("signaltranscript.backend.recovery.restore_sqlite_backup", side_effect=mutate_then_restore):
             with self.assertRaisesRegex(BackupError, "SNAPSHOT_HASH_MISMATCH"):
                 stage_verified_recovery(self.snapshot, destination)
@@ -119,14 +117,7 @@ class SQLiteRecoveryTests(unittest.TestCase):
         destination = self.root / "receipt-invariants.db"
         receipt = stage_verified_recovery(self.snapshot, destination)
         valid = receipt.as_dict()
-        invalid_values = (
-            ("source_sha256", "g" * 64),
-            ("restored_sha256", "0" * 63),
-            ("restored_size_bytes", 0),
-            ("sqlite_user_version", -1),
-            ("sqlite_page_count", 0),
-            ("sqlite_page_size", 0),
-        )
+        invalid_values = (("source_sha256", "g" * 64), ("restored_sha256", "0" * 63), ("restored_size_bytes", 0), ("sqlite_user_version", -1), ("sqlite_page_count", 0), ("sqlite_page_size", 0))
         for field, value in invalid_values:
             with self.subTest(field=field, value=value):
                 with self.assertRaisesRegex(BackupError, "RECOVERY_RECEIPT_INVALID"):
@@ -135,13 +126,7 @@ class SQLiteRecoveryTests(unittest.TestCase):
     def test_receipt_parser_normalizes_valid_uppercase_hashes(self):
         destination = self.root / "receipt-uppercase.db"
         receipt = stage_verified_recovery(self.snapshot, destination)
-        parsed = RecoveryReceipt.from_dict(
-            {
-                **receipt.as_dict(),
-                "source_sha256": receipt.source_sha256.upper(),
-                "restored_sha256": receipt.restored_sha256.upper(),
-            }
-        )
+        parsed = RecoveryReceipt.from_dict({**receipt.as_dict(), "source_sha256": receipt.source_sha256.upper(), "restored_sha256": receipt.restored_sha256.upper()})
         self.assertEqual(parsed, receipt)
 
     def test_saved_receipt_is_private_canonical_and_verifiable(self):
@@ -150,10 +135,7 @@ class SQLiteRecoveryTests(unittest.TestCase):
         receipt_path = self.root / "recovery.json"
         save_recovery_receipt(receipt_path, receipt)
         self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(
-            receipt_path.read_bytes(),
-            (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode(),
-        )
+        self.assertEqual(receipt_path.read_bytes(), (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode())
         verify_recovery_receipt(self.snapshot, destination, RecoveryReceipt.from_dict(json.loads(receipt_path.read_text())))
 
     def test_saved_receipt_never_overwrites_existing_evidence(self):
@@ -194,22 +176,15 @@ class SQLiteRecoveryTests(unittest.TestCase):
         receipt_path = self.root / "cli-receipt.json"
         output = io.StringIO()
         with redirect_stdout(output):
-            result = main([
-                "--snapshot", str(self.snapshot),
-                "--destination", str(destination),
-                "--receipt-out", str(receipt_path),
-            ])
+            result = main(["--snapshot", str(self.snapshot), "--destination", str(destination), "--receipt-out", str(receipt_path)])
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue()), json.loads(receipt_path.read_text()))
         before = receipt_path.read_bytes()
         second_destination = self.root / "cli-receipt-second.db"
         with self.assertRaises(SystemExit):
-            main([
-                "--snapshot", str(self.snapshot),
-                "--destination", str(second_destination),
-                "--receipt-out", str(receipt_path),
-            ])
+            main(["--snapshot", str(self.snapshot), "--destination", str(second_destination), "--receipt-out", str(receipt_path)])
         self.assertEqual(receipt_path.read_bytes(), before)
+        self.assertFalse(second_destination.exists())
 
     def test_cli_hash_mismatch_exits_without_destination(self):
         destination = self.root / "cli-never.db"
@@ -246,12 +221,7 @@ class SQLiteRecoveryTests(unittest.TestCase):
         receipt_path = self.root / "verify-exclusive.json"
         receipt_path.write_text(json.dumps(receipt.as_dict()), encoding="utf-8")
         with self.assertRaises(SystemExit):
-            main([
-                "--snapshot", str(self.snapshot),
-                "--destination", str(destination),
-                "--verify-receipt", str(receipt_path),
-                "--receipt-out", str(self.root / "never.json"),
-            ])
+            main(["--snapshot", str(self.snapshot), "--destination", str(destination), "--verify-receipt", str(receipt_path), "--receipt-out", str(self.root / "never.json")])
 
 
 if __name__ == "__main__":
