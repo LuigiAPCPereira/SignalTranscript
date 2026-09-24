@@ -12,9 +12,13 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
+import stat
 import string
 
 from .backup import BackupError, inspect_sqlite_backup, restore_sqlite_backup
+
+
+_MAX_RECEIPT_BYTES = 16 * 1024
 
 
 def _is_sha256(value: object) -> bool:
@@ -144,11 +148,30 @@ def save_recovery_receipt(path: Path, receipt: RecoveryReceipt) -> Path:
     return target
 
 
-def _load_receipt(path: Path) -> RecoveryReceipt:
+def load_recovery_receipt(path: Path) -> RecoveryReceipt:
+    """Load a small regular receipt without following symlinks or special files."""
+    target = Path(path)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fd = os.open(target, flags)
+    except OSError as exc:
         raise BackupError("RECOVERY_RECEIPT_INVALID") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= 0 or info.st_size > _MAX_RECEIPT_BYTES:
+            raise BackupError("RECOVERY_RECEIPT_INVALID")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            payload = handle.read(_MAX_RECEIPT_BYTES + 1)
+        if len(payload) > _MAX_RECEIPT_BYTES:
+            raise BackupError("RECOVERY_RECEIPT_INVALID")
+        try:
+            raw = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("RECOVERY_RECEIPT_INVALID") from exc
+    finally:
+        os.close(fd)
     if not isinstance(raw, dict):
         raise BackupError("RECOVERY_RECEIPT_INVALID")
     return RecoveryReceipt.from_dict(raw)
@@ -171,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.verify_receipt is not None:
-            receipt = _load_receipt(args.verify_receipt)
+            receipt = load_recovery_receipt(args.verify_receipt)
             verify_recovery_receipt(args.snapshot, args.destination, receipt)
         else:
             receipt = stage_verified_recovery(args.snapshot, args.destination, expected_sha256=args.expect_sha256)
