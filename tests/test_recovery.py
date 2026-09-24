@@ -1,3 +1,6 @@
+from contextlib import redirect_stdout
+import io
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -5,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from signaltranscript.backend.backup import BackupError, backup_sqlite
-from signaltranscript.backend.recovery import stage_verified_recovery
+from signaltranscript.backend.recovery import main, stage_verified_recovery
 
 
 class SQLiteRecoveryTests(unittest.TestCase):
@@ -66,6 +69,14 @@ class SQLiteRecoveryTests(unittest.TestCase):
 
         self.assertFalse(destination.exists())
 
+    def test_explicit_expected_hash_is_checked_before_staging(self):
+        destination = self.root / "never-mismatch.db"
+
+        with self.assertRaisesRegex(BackupError, "SNAPSHOT_HASH_MISMATCH"):
+            stage_verified_recovery(self.snapshot, destination, expected_sha256="0" * 64)
+
+        self.assertFalse(destination.exists())
+
     def test_invalid_snapshot_never_creates_destination(self):
         invalid = self.root / "invalid.db"
         invalid.write_bytes(b"not sqlite")
@@ -73,6 +84,35 @@ class SQLiteRecoveryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(BackupError, "SQLITE_VERIFICATION_FAILED"):
             stage_verified_recovery(invalid, destination)
+
+        self.assertFalse(destination.exists())
+
+    def test_cli_stages_snapshot_and_prints_receipt_json(self):
+        destination = self.root / "cli-staged.db"
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            result = main(["--snapshot", str(self.snapshot), "--destination", str(destination)])
+
+        self.assertEqual(result, 0)
+        receipt = json.loads(output.getvalue())
+        self.assertEqual(receipt["sqlite_user_version"], 2)
+        self.assertEqual(len(receipt["source_sha256"]), 64)
+        self.assertEqual(len(receipt["restored_sha256"]), 64)
+        self.assertTrue(destination.exists())
+
+    def test_cli_hash_mismatch_exits_without_destination(self):
+        destination = self.root / "cli-never.db"
+
+        with self.assertRaises(SystemExit):
+            main([
+                "--snapshot",
+                str(self.snapshot),
+                "--destination",
+                str(destination),
+                "--expect-sha256",
+                "0" * 64,
+            ])
 
         self.assertFalse(destination.exists())
 
