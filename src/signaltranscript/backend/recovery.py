@@ -41,12 +41,7 @@ class RecoveryReceipt:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "RecoveryReceipt":
-        """Parse only a physically plausible exact receipt schema.
-
-        Receipts can be stored and supplied later, so parsing is deliberately
-        fail-closed: no extra fields, type coercion, malformed digests, negative
-        counters, or impossible zero-sized SQLite metadata are accepted.
-        """
+        """Parse only a physically plausible exact receipt schema."""
         expected = {
             "source_sha256",
             "restored_sha256",
@@ -64,12 +59,7 @@ class RecoveryReceipt:
             sqlite_user_version = value["sqlite_user_version"]
             sqlite_page_count = value["sqlite_page_count"]
             sqlite_page_size = value["sqlite_page_size"]
-            integers = (
-                restored_size_bytes,
-                sqlite_user_version,
-                sqlite_page_count,
-                sqlite_page_size,
-            )
+            integers = (restored_size_bytes, sqlite_user_version, sqlite_page_count, sqlite_page_size)
             if not _is_sha256(source_sha256) or not _is_sha256(restored_sha256):
                 raise TypeError
             if any(type(item) is not int for item in integers):
@@ -90,23 +80,12 @@ class RecoveryReceipt:
             raise BackupError("RECOVERY_RECEIPT_INVALID") from exc
 
 
-def stage_verified_recovery(
-    snapshot: Path,
-    destination: Path,
-    *,
-    expected_sha256: str | None = None,
-) -> RecoveryReceipt:
+def stage_verified_recovery(snapshot: Path, destination: Path, *, expected_sha256: str | None = None) -> RecoveryReceipt:
     """Stage exactly the snapshot inspected at entry and verify the result."""
     source = inspect_sqlite_backup(Path(snapshot), expected_sha256=expected_sha256)
     source_sha256 = str(source["sha256"])
-
-    restored = restore_sqlite_backup(
-        Path(snapshot),
-        Path(destination),
-        expected_sha256=source_sha256,
-    )
+    restored = restore_sqlite_backup(Path(snapshot), Path(destination), expected_sha256=source_sha256)
     result = inspect_sqlite_backup(restored)
-
     return RecoveryReceipt(
         source_sha256=source_sha256,
         restored_sha256=str(result["sha256"]),
@@ -117,17 +96,8 @@ def stage_verified_recovery(
     )
 
 
-def verify_recovery_receipt(
-    snapshot: Path,
-    destination: Path,
-    receipt: RecoveryReceipt,
-) -> None:
-    """Verify that a receipt still describes the exact source and staged DB.
-
-    This is read-only. It intentionally does not repair, replace, migrate, or
-    promote either database. A mismatch is a failed verification, never a
-    partial success.
-    """
+def verify_recovery_receipt(snapshot: Path, destination: Path, receipt: RecoveryReceipt) -> None:
+    """Verify that a receipt still describes the exact source and staged DB."""
     source = inspect_sqlite_backup(Path(snapshot), expected_sha256=receipt.source_sha256)
     restored = inspect_sqlite_backup(Path(destination), expected_sha256=receipt.restored_sha256)
     observed = RecoveryReceipt(
@@ -186,9 +156,7 @@ def _load_receipt(path: Path) -> RecoveryReceipt:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Stage a snapshot or verify an earlier recovery receipt, without cutover."""
-    parser = argparse.ArgumentParser(
-        description="Stage or verify SignalTranscript SQLite recovery without replacing active data"
-    )
+    parser = argparse.ArgumentParser(description="Stage or verify SignalTranscript SQLite recovery without replacing active data")
     parser.add_argument("--snapshot", required=True, type=Path, help="verified SQLite source snapshot")
     parser.add_argument("--destination", required=True, type=Path, help="staged database path")
     parser.add_argument("--expect-sha256", help="optional exact SHA-256 required before staging")
@@ -206,13 +174,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = _load_receipt(args.verify_receipt)
             verify_recovery_receipt(args.snapshot, args.destination, receipt)
         else:
-            receipt = stage_verified_recovery(
-                args.snapshot,
-                args.destination,
-                expected_sha256=args.expect_sha256,
-            )
+            receipt = stage_verified_recovery(args.snapshot, args.destination, expected_sha256=args.expect_sha256)
             if args.receipt_out is not None:
-                save_recovery_receipt(args.receipt_out, receipt)
+                try:
+                    save_recovery_receipt(args.receipt_out, receipt)
+                except BackupError:
+                    try:
+                        Path(args.destination).unlink()
+                    except OSError as cleanup_error:
+                        raise BackupError("RECOVERY_CLEANUP_FAILED") from cleanup_error
+                    raise
     except (BackupError, OSError):
         parser.error("recovery operation could not be completed safely")
 
