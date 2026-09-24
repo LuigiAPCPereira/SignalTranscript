@@ -8,8 +8,10 @@ only after their integrity check.
 
 import argparse
 from collections.abc import Sequence
+from hashlib import sha256
 from pathlib import Path
 import os
+import re
 import sqlite3
 import tempfile
 
@@ -38,14 +40,50 @@ def _open_verified_readonly(path: Path) -> sqlite3.Connection:
     return db
 
 
-def verify_sqlite_backup(path: Path) -> Path:
-    """Verify a candidate snapshot without modifying it or its schema."""
+def _sha256_regular_file(path: Path) -> str:
+    """Hash a non-symlink regular file without accepting an unbounded stream."""
     path = Path(path)
+    if not path.exists() or not path.is_file() or path.is_symlink():
+        raise BackupError("SOURCE_NOT_REGULAR_FILE")
+    digest = sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise BackupError("SOURCE_HASH_FAILED") from exc
+    return digest.hexdigest()
+
+
+def _normalize_expected_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+        raise BackupError("EXPECTED_SHA256_INVALID")
+    return normalized
+
+
+def verify_sqlite_backup(path: Path, *, expected_sha256: str | None = None) -> Path:
+    """Verify a candidate snapshot without modifying it or its schema.
+
+    When ``expected_sha256`` is supplied, verification also pins the exact
+    snapshot bytes selected by the operator. This is useful before restore
+    staging when several backups exist; a filename alone is not evidence that
+    the intended snapshot was selected.
+    """
+    path = Path(path)
+    expected = _normalize_expected_sha256(expected_sha256)
+    before = _sha256_regular_file(path) if expected is not None else None
+    if expected is not None and before != expected:
+        raise BackupError("SNAPSHOT_HASH_MISMATCH")
     db = _open_verified_readonly(path)
     try:
         db.execute("PRAGMA query_only = ON")
     finally:
         db.close()
+    if expected is not None and _sha256_regular_file(path) != expected:
+        raise BackupError("SNAPSHOT_CHANGED_DURING_VERIFICATION")
     return path
 
 
@@ -110,23 +148,31 @@ def backup_sqlite(source: Path, destination: Path) -> Path:
         source_db.close()
 
 
-def restore_sqlite_backup(snapshot: Path, destination: Path) -> Path:
+def restore_sqlite_backup(
+    snapshot: Path, destination: Path, *, expected_sha256: str | None = None
+) -> Path:
     """Stage a verified backup into a new database path without replacing data.
 
     This intentionally does not swap an active database. The caller receives a
     new private SQLite file that can be inspected before any separately
-    authorized cutover.
+    authorized cutover. An optional SHA-256 pins the exact selected snapshot.
     """
     snapshot = Path(snapshot)
     destination = Path(destination)
     if snapshot.resolve() == destination.resolve():
         raise BackupError("DESTINATION_EQUALS_SOURCE")
+    verify_sqlite_backup(snapshot, expected_sha256=expected_sha256)
     source_db = _open_verified_readonly(snapshot)
     try:
         restored = _snapshot_to_new_file(source_db, destination)
     finally:
         source_db.close()
     verify_sqlite_backup(restored)
+    if expected_sha256 is not None:
+        # Re-check the source after copying. SQLite's backup API gives a
+        # consistent destination, while this check refuses to report success if
+        # the selected snapshot file itself changed during the restore window.
+        verify_sqlite_backup(snapshot, expected_sha256=expected_sha256)
     return restored
 
 
@@ -143,6 +189,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="existing snapshot to verify read-only")
     parser.add_argument("--restore", type=Path,
                         help="verified snapshot to stage into a new database path")
+    parser.add_argument("--expect-sha256",
+                        help="optional exact snapshot SHA-256 required for verify/restore")
     args = parser.parse_args(argv)
 
     modes = sum((args.source is not None, args.verify is not None, args.restore is not None))
@@ -154,12 +202,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("restore staging requires --restore and --destination")
     if args.verify is not None and args.destination is not None:
         parser.error("verification does not accept --destination")
+    if args.source is not None and args.expect_sha256 is not None:
+        parser.error("--expect-sha256 applies only to verification or restore staging")
 
     try:
         if args.verify is not None:
-            verify_sqlite_backup(args.verify)
+            verify_sqlite_backup(args.verify, expected_sha256=args.expect_sha256)
         elif args.restore is not None:
-            restore_sqlite_backup(args.restore, args.destination)
+            restore_sqlite_backup(
+                args.restore, args.destination, expected_sha256=args.expect_sha256
+            )
         else:
             backup_sqlite(args.source, args.destination)
     except (BackupError, OSError):
