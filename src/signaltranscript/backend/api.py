@@ -14,10 +14,16 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from signaltranscript.ai.long_form import ChunkPlanningError
+from signaltranscript.ai.errors import ProviderFailure
+from signaltranscript.ai.long_form import ChunkPlanningError, SectionedAnalysis
 from signaltranscript.ai.ports import AnalysisProvider, Segment, Transcript
 from signaltranscript.ai.section_checkpoint import (
     CheckpointMismatch, SQLiteSectionCheckpoint, analyze_with_checkpoint,
+)
+from signaltranscript.ai.synthesis import GlobalSynthesisProvider, SynthesisValidationError
+from signaltranscript.ai.synthesis_checkpoint import (
+    SQLiteGlobalSynthesisCheckpoint, SynthesisCheckpointMismatch,
+    synthesize_with_checkpoint,
 )
 from signaltranscript.backend.caption_evidence import (
     CaptionEvidenceError, parse_manifest, verify_submitted_caption,
@@ -75,14 +81,26 @@ def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
 
 def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_name: str,
                model: str, revision: str, max_chars: int = 12_000,
-               on_provider_shutdown: Callable[[], Awaitable[None]] | None = None) -> FastAPI:
-    """One Linux process, one injected provider, one sequential worker."""
+               on_provider_shutdown: Callable[[], Awaitable[None]] | None = None,
+               synthesis_provider: GlobalSynthesisProvider | None = None,
+               synthesis_provider_name: str | None = None,
+               synthesis_model: str | None = None,
+               synthesis_revision: str | None = None,
+               on_synthesis_provider_shutdown: Callable[[], Awaitable[None]] | None = None) -> FastAPI:
+    """One Linux process, one section worker; global synthesis is explicit opt-in."""
     if any(not isinstance(v, str) or not v.strip() for v in (provider_name, model, revision)):
         raise ValueError("provider, model and revision are required")
     if type(max_chars) is not int or max_chars <= 0:
         raise ValueError("max_chars must be a positive integer")
+    synthesis_identity = (synthesis_provider_name, synthesis_model, synthesis_revision)
+    if synthesis_provider is None:
+        if any(value is not None for value in synthesis_identity):
+            raise ValueError("synthesis identity requires a synthesis provider")
+    elif any(not isinstance(value, str) or not value.strip() for value in synthesis_identity):
+        raise ValueError("synthesis provider, model and revision are required")
     jobs = SQLiteJobs(Path(db_path))
     wake = asyncio.Event()
+    synthesis_lock = asyncio.Lock()
 
     async def run_once() -> bool:
         job = jobs.claim_next()
@@ -156,6 +174,8 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 lock_file.close()
             if on_provider_shutdown is not None:
                 await on_provider_shutdown()
+            if on_synthesis_provider_shutdown is not None:
+                await on_synthesis_provider_shutdown()
 
     app = FastAPI(title="SignalTranscript local analysis", lifespan=lifespan)
 
@@ -239,5 +259,59 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 "result_kind": "SECTIONS_ONLY", "planned_sections": job.section_count,
                 "sections": [asdict(section) for section in completed],
                 "provenance": provenance_view(job)}
+
+
+    @app.post("/api/jobs/{job_id}/synthesis")
+    async def synthesize(job_id: str):
+        """Explicit global synthesis; never triggered automatically by section completion."""
+        if synthesis_provider is None:
+            raise HTTPException(status_code=409, detail="SYNTHESIS_PROVIDER_NOT_CONFIGURED")
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+        if job.state != "COMPLETED":
+            raise HTTPException(status_code=409, detail="SECTIONS_NOT_COMPLETE")
+        assert synthesis_provider_name is not None
+        assert synthesis_model is not None
+        assert synthesis_revision is not None
+        async with synthesis_lock:
+            try:
+                section_checkpoint = SQLiteSectionCheckpoint(
+                    jobs.path, run_id=job.id, transcript=job.transcript,
+                    provider=job.provider, model=job.model, revision=job.revision,
+                    max_chars=job.max_chars,
+                )
+                completed = section_checkpoint.open_and_load()
+                if len(completed) != job.section_count:
+                    raise CheckpointMismatch("INCOMPLETE_CHECKPOINT")
+                sectioned = SectionedAnalysis(
+                    job.transcript.video_id, job.section_count, completed,
+                )
+                checkpoint = SQLiteGlobalSynthesisCheckpoint(
+                    jobs.path, run_id=job.id, transcript=job.transcript,
+                    sectioned=sectioned, provider=synthesis_provider_name,
+                    model=synthesis_model, revision=synthesis_revision,
+                )
+                result = await synthesize_with_checkpoint(checkpoint, synthesis_provider)
+            except ProviderFailure as failure:
+                if failure.remote_outcome_unknown:
+                    raise HTTPException(
+                        status_code=409, detail="SYNTHESIS_REMOTE_OUTCOME_UNKNOWN",
+                    ) from None
+                if failure.code == "RATE_LIMITED":
+                    raise HTTPException(status_code=429, detail="SYNTHESIS_RATE_LIMITED") from None
+                raise HTTPException(status_code=502, detail="SYNTHESIS_PROVIDER_FAILURE") from None
+            except (CheckpointMismatch, SynthesisCheckpointMismatch,
+                    SynthesisValidationError, ChunkPlanningError, ValueError):
+                raise HTTPException(status_code=409, detail="INVALID_SYNTHESIS_CHECKPOINT") from None
+            except Exception:
+                raise HTTPException(status_code=500, detail="SYNTHESIS_INTERNAL_ERROR") from None
+        return {
+            "job_id": job.id,
+            "result_kind": "GLOBAL_SYNTHESIS",
+            "analysis": asdict(result.analysis),
+            "coverage": asdict(result.coverage),
+            "provenance": provenance_view(job),
+        }
 
     return app

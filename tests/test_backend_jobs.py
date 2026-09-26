@@ -59,6 +59,23 @@ def budget() -> int:
     return compact_source_chars(Transcript(tr.video_id, tr.source, (tr.segments[0],), language=tr.language)) + 1
 
 
+class FakeSynthesisProvider:
+    def __init__(self, *, invalid_reference: bool = False):
+        self.calls = 0
+        self.invalid_reference = invalid_reference
+
+    async def synthesize(self, transcript: Transcript, sectioned) -> Analysis:
+        self.calls += 1
+        refs = ("missing",) if self.invalid_reference else tuple(
+            segment.id for segment in transcript.segments
+        )
+        return Analysis(
+            "Global summary",
+            (Idea("Global topic", "Supported across the transcript", refs),),
+            provider="synth-fake", model="synth-model",
+        )
+
+
 class FakeProvider:
     def __init__(self, fail_at: int | None = None):
         self.calls: list[tuple[str, ...]] = []
@@ -149,8 +166,15 @@ class APIIntegrationTests(unittest.TestCase):
         self.path = Path(self.tmp.name) / "jobs.db"
 
     def app(self, provider, **kwargs):
-        return create_app(self.path, analysis_provider=provider, provider_name="fake",
-                          model=kwargs.get("model", "test-model"), revision="v1", max_chars=budget())
+        synthesis = kwargs.get("synthesis")
+        return create_app(
+            self.path, analysis_provider=provider, provider_name="fake",
+            model=kwargs.get("model", "test-model"), revision="v1", max_chars=budget(),
+            synthesis_provider=synthesis,
+            synthesis_provider_name="synth-fake" if synthesis is not None else None,
+            synthesis_model="synth-model" if synthesis is not None else None,
+            synthesis_revision="synth-v1" if synthesis is not None else None,
+        )
 
     def test_full_import_and_section_results_not_global(self):
         fake = FakeProvider()
@@ -199,6 +223,62 @@ class APIIntegrationTests(unittest.TestCase):
             for invalid in (forged, changed, wrong_video):
                 with self.subTest(invalid=invalid):
                     self.assertEqual(client.post("/api/jobs", json=invalid).status_code, 422)
+
+
+    def test_global_synthesis_is_explicit_checkpointed_and_never_changes_section_result(self):
+        section_provider = FakeProvider()
+        synthesis_provider = FakeSynthesisProvider()
+        with TestClient(self.app(section_provider, synthesis=synthesis_provider)) as client:
+            created = client.post("/api/jobs", json=body())
+            job_id = created.json()["id"]
+            self.assertEqual(poll(client, job_id)["result_kind"], "SECTIONS_ONLY")
+
+            first = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(first.status_code, 200, first.text)
+            payload = first.json()
+            self.assertEqual(payload["result_kind"], "GLOBAL_SYNTHESIS")
+            self.assertEqual(payload["analysis"]["summary"], "Global summary")
+            self.assertEqual(payload["analysis"]["provider"], "synth-fake")
+            self.assertFalse(payload["provenance"]["deep_links_allowed"])
+
+            second = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertEqual(second.json(), payload)
+            self.assertEqual(synthesis_provider.calls, 1)
+
+            sections = client.get(f"/api/jobs/{job_id}/sections").json()
+            self.assertEqual(sections["result_kind"], "SECTIONS_ONLY")
+            self.assertNotIn("summary", sections)
+
+    def test_global_synthesis_requires_explicit_configuration_and_complete_sections(self):
+        with TestClient(self.app(FakeProvider())) as client:
+            job_id = client.post("/api/jobs", json=body()).json()["id"]
+            self.assertEqual(poll(client, job_id)["state"], "COMPLETED")
+            unavailable = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(unavailable.status_code, 409)
+            self.assertEqual(unavailable.json()["detail"], "SYNTHESIS_PROVIDER_NOT_CONFIGURED")
+
+        interrupted_sections = FakeProvider(fail_at=1)
+        synthesis_provider = FakeSynthesisProvider()
+        with TestClient(self.app(interrupted_sections, synthesis=synthesis_provider)) as client:
+            job_id = client.post("/api/jobs", json=body()).json()["id"]
+            self.assertEqual(poll(client, job_id)["state"], "INTERRUPTED")
+            incomplete = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(incomplete.status_code, 409)
+            self.assertEqual(incomplete.json()["detail"], "SECTIONS_NOT_COMPLETE")
+        self.assertEqual(synthesis_provider.calls, 0)
+
+    def test_invalid_global_synthesis_is_not_persisted(self):
+        synthesis_provider = FakeSynthesisProvider(invalid_reference=True)
+        with TestClient(self.app(FakeProvider(), synthesis=synthesis_provider)) as client:
+            job_id = client.post("/api/jobs", json=body()).json()["id"]
+            self.assertEqual(poll(client, job_id)["state"], "COMPLETED")
+            invalid = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(invalid.status_code, 409)
+            self.assertEqual(invalid.json()["detail"], "INVALID_SYNTHESIS_CHECKPOINT")
+            again = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(again.status_code, 409)
+        self.assertEqual(synthesis_provider.calls, 2)
 
     def test_unknown_remote_outcome_waits_for_explicit_resume_and_reuses_prefix(self):
         fake = FakeProvider(fail_at=2)
