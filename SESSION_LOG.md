@@ -28,3 +28,12 @@
 - Limites: nenhum SDK instalado na verificação, requisição real, CI, modelo local/NIM, chunking de vídeo longo, verificação de aderência semântica, persistência ou E2E. A análise inicial produz resumo sem referências próprias e ideias com referências de segmentos; isso não comprova a veracidade de qualquer alegação.
 
 **Checkpoint vinculado:** T-004 documental, T-010 técnico e T-003 parcial. Conferir [TASKLIST](TASKLIST.md), [PROJECT_STATE](PROJECT_STATE.md) e PRs/HEAD atuais antes de continuar. Nenhum merge/deploy foi realizado nesta fatia.
+
+
+## 2026-09-26 — Runtime de síntese recuperável e Adoption Gate v2
+
+- T-005/T-007: análise por seções e síntese global passaram a exigir consentimentos separados no smoke; adaptador Groq de síntese permanece função independente e opt-in. A síntese possui checkpoint SQLite e agora também leitura `GET /api/jobs/{id}/synthesis` que não chama IA nem cria a tabela quando nenhum resultado existe.
+- A primeira revisão do GET (`488e31df`) compilou, mas o CI falhou em um teste porque o mock não interceptava um default de função capturado no import. A injeção foi corrigida em `e6c159777f12c8f51a9ee085c07e5e1b062ba8a6`; Actions 36255131808 passou Python 3.12/3.13 com 234 testes.
+- Adoption Gate v2 reaplicado em modo Aplicar por solicitação explícita do usuário. O SHA-256 do `DOCUMENTATION_AND_CONTINUITY.md` do Project (`7e64d070...39213`) e do `ENGINEERING_DNA.md` (`c19c5d97...a0e373`) coincidem exatamente com os hashes de origem registrados no manifesto central v2.2.
+- Corrigida a interpretação anterior que tratava o estado editorial Notion STAGING como bloqueio automático da adoção do projeto. O protocolo v2.2 separa distribuição/publicação central, adoção por projeto e operação integrada. A distribuição central segue STAGING; o Adoption Gate do SignalTranscript passa na ref de trabalho após reconciliação das nove funções.
+- A `main` continua não integrada; PR #10 permanece Draft. O loop agendado SignalTranscript foi observado desabilitado e não foi reativado nem alterado.

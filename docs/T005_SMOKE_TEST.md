@@ -1,40 +1,96 @@
-# T-005 / T-010 — smoke test operacional de análise
+# T-005 / T-007 / T-010 — smoke operacional com consentimento em duas etapas
 
-**Status:** ferramenta proposta em `feat/t005-smoke-test` (PR empilhado sobre #8); a execução autenticada NÃO foi realizada por esta sessão. Consulte [TASKLIST](../TASKLIST.md), [checkpoint](../PROJECT_STATE.md) e [configuração local](T005_LOCAL_RUNTIME.md).
+**Estado:** implementado e validado offline no PR #10. A ferramenta não executa rede no modo padrão e nenhuma chamada autenticada à Groq foi realizada nesta validação. [TASKLIST](../TASKLIST.md) · [checkpoint](../PROJECT_STATE.md) · [runtime](T005_LOCAL_RUNTIME.md).
 
-## Alcance
+## Princípio
 
-`python -m signaltranscript.backend.smoke` trabalha apenas com **transcrições importadas**, nunca baixa vídeos ou transcreve áudio. A entrada padrão é `examples/synthetic_transcript.json`, texto inventado e não sensível; não constitui vídeo real. O modo padrão valida o JSON com o mesmo esquema de entrada HTTP e com o contrato neutro `Transcript`; não abre conexões. Nenhum segredo vai para argumentos ou para arquivos versionados.
+Análise por seções e síntese global são **duas operações diferentes**. Cada uma pode transmitir dados e consumir cota separadamente. O smoke nunca transforma a autorização da primeira em autorização da segunda.
 
-A opção `--submit` só funciona com **`--confirm-provider-upload` e `--expect-provider NOME`**. Antes de `POST /api/jobs`, o cliente consulta `GET /api/config` no endereço fixo `127.0.0.1` e exige o provedor esperado, modelo identificado e saída `SECTIONS_ONLY`. O servidor divulga somente nome/modelo/tipo, não chave. Um job é submetido uma vez; o cliente imprime seu ID e consulta estado/seções. Timeout, falha ou resultado remoto incerto **não provocam outro POST, resume ou fallback**.
-
-A validação estrutural exige tarefa `COMPLETED`, seções íntegras/ordenadas, cobertura de todos os IDs na ordem original, mesmas identidades de provedor/modelo e referências apenas a IDs pertencentes à seção. Não verifica verdade factual, adequação semântica ou síntese global.
-
-## Passos no Linux (na branch desta alteração)
-
-No terminal do servidor, use ambiente virtual Python 3.12+ e instale: `python -m pip install -e '.[serve,groq]'`. Prepare um diretório privado: `mkdir -p "$HOME/.local/share/signaltranscript" && chmod 700 "$HOME/.local/share/signaltranscript"`. Configure `GROQ_API_KEY` **apenas no processo local** (por exemplo, `read -rsp 'Groq API key: ' GROQ_API_KEY; echo; export GROQ_API_KEY`), sem colá-la no chat ou GitHub. Inicie:
+O modo padrão apenas valida a transcrição local:
 
 ```bash
-python -m signaltranscript.backend.serve --analysis-provider groq
+python -m signaltranscript.backend.smoke \
+  --transcript examples/synthetic_transcript.json
 ```
 
-Em outro terminal no mesmo checkout/venv, primeiro execute **sem rede**:
+Nenhum HTTP ou provedor é usado.
+
+## Operação 1 — análise por seções
+
+Para permitir **uma submissão de análise**, são exigidos simultaneamente:
+
+- `--submit-analysis`;
+- `--confirm-analysis-upload`;
+- `--expect-analysis-provider NOME`.
+
+Os aliases antigos `--submit`, `--confirm-provider-upload` e `--expect-provider` continuam aceitos somente para compatibilidade.
+
+Antes do POST, o cliente consulta `GET /api/config` em `127.0.0.1` e exige que `analysis_provider`, modelo e `SECTIONS_ONLY` correspondam ao esperado. O job é submetido uma única vez. Timeout ou resultado desconhecido não provoca novo POST, resume ou fallback.
+
+Exemplo explícito:
 
 ```bash
-python -m signaltranscript.backend.smoke --transcript examples/synthetic_transcript.json
+python -m signaltranscript.backend.smoke \
+  --transcript examples/synthetic_transcript.json \
+  --submit-analysis \
+  --confirm-analysis-upload \
+  --expect-analysis-provider groq
 ```
 
-**Somente se você decidir consumir uma chamada da Groq e enviar esse conteúdo sintético**, execute:
+## Operação 2 — síntese global
+
+A síntese **não é consequência automática** da análise. Para solicitá-la no mesmo smoke, além de todos os argumentos da análise são exigidos:
+
+- `--synthesize-global`;
+- `--confirm-synthesis-upload`;
+- `--expect-synthesis-provider NOME`.
+
+Todas essas opções são validadas **antes do primeiro POST**. Portanto, um comando que pede síntese mas esquece o segundo consentimento não envia nem a análise.
+
+Depois de `SECTIONS_ONLY` concluir, o cliente consulta `GET /api/config` novamente e exige `synthesis_provider` e `synthesis_model` correspondentes antes de executar exatamente um `POST /api/jobs/{id}/synthesis`.
+
+Exemplo com Groq selecionada separadamente nas duas funções:
 
 ```bash
-python -m signaltranscript.backend.smoke --transcript examples/synthetic_transcript.json \
-  --submit --confirm-provider-upload --expect-provider groq
+python -m signaltranscript.backend.smoke \
+  --transcript examples/synthetic_transcript.json \
+  --submit-analysis \
+  --confirm-analysis-upload \
+  --expect-analysis-provider groq \
+  --synthesize-global \
+  --confirm-synthesis-upload \
+  --expect-synthesis-provider groq
 ```
 
-O servidor deve permanecer restrito a `127.0.0.1` sem túnel, proxy público ou publicação de porta. O comando acima usa um exemplo criado para testes; para arquivo próprio, substitua `--transcript` apenas por material que você pode enviar ao provedor. Consulte regras de privacidade e quota da sua conta antes de executar.
+Mesmo quando os nomes são iguais, são dois consentimentos e duas operações potencialmente cobradas.
 
-Em caso de `POLL_TIMEOUT_JOB_ID_DO_NOT_RESUBMIT`, consulte o job existente com `GET /api/jobs/{id}`. Se o `POST` falhar antes de receber ID, o resultado é desconhecido; não repita automaticamente. `POST /api/jobs/{id}/resume` pertence à decisão explícita do usuário, pois a chamada anterior pode ter consumido recursos remotos. Nunca publicar chave, logs de SDK ou transcrições privadas.
+## Validação estrutural
 
-## Evidências e limites
+Para seções, o smoke exige job `COMPLETED`, ordem/cobertura integral dos IDs, identidade de provedor/modelo e referências pertencentes à própria seção. Ele recalcula cobertura posicional início/meio/fim; isso não é uma síntese nem prova semântica.
 
-O CI testa cliente, rota de configuração e fluxo completo HTTP/SQLite com **provedor fake**; nenhuma chave é configurada, nenhum SDK Groq é instalado para a suíte e não há requisição externa. O funcionamento efetivo com GPT-OSS 120B, suas cotas e a qualidade da saída dependem de execução local autorizada e evidência separada. T-005/T-010 permanecem parciais, assim como T-003/T-006 e T-007; adoção do protocolo v2.2 permanece parcial enquanto a fonte editorial estiver STAGING. PR em Draft; sem merge ou deploy automático.
+Para `GLOBAL_SYNTHESIS`, o cliente valida novamente job ID, tipo de resultado, identidade do provedor/modelo, estrutura das ideias, IDs existentes e proveniência. A cobertura retornada pelo servidor é comparada com uma cobertura **recalculada localmente a partir das referências da síntese**. Divergência falha fechado.
+
+Nenhum dos dois caminhos comprova factualidade ou habilita deep links.
+
+## Timeout e resultado remoto desconhecido
+
+O smoke nunca reenvia automaticamente análise ou síntese. Se houver timeout do POST de análise antes de receber job ID, o resultado é desconhecido. Se a síntese já tiver sido enviada e a resposta HTTP for perdida, também não deve ser repetida cegamente.
+
+Existe `GET /api/jobs/{id}/synthesis`, estritamente read-only: ele só devolve checkpoint global já persistido e não chama o provedor. A leitura usa `provider/model/revision` gravados com o próprio resultado, portanto não depende de um provedor de síntese estar configurado no servidor naquele momento. Quando não há resultado, responde `SYNTHESIS_NOT_FOUND`; a leitura não cria a tabela `global_syntheses`.
+
+Após timeout ou dúvida, consulte primeiro:
+
+```bash
+python -m signaltranscript.backend.smoke \
+  --transcript examples/synthetic_transcript.json \
+  --check-synthesis-job JOB_ID \
+  --expect-synthesis-provider groq
+```
+
+Esse modo usa somente **um** `GET /api/jobs/{id}/synthesis`, não pede consentimento de upload e não dispara inferência. `--expect-synthesis-provider` é comparado com a identidade persistida retornada, não com a configuração viva do servidor. Se nenhum checkpoint existir, decidir uma nova tentativa continua sendo ação humana explícita; o cliente não converte 404 em retry.
+
+## Evidência
+
+SHA `43f6b135d962d09a93de460d5c94f61b4a5fe1f5`, GitHub Actions **36256244587**: PASS Python 3.12 e 3.13; **237 testes PASS**. A primeira revisão do GET (`488e31df`) falhou apenas no teste CLI por captura prematura do transport; a injeção foi corrigida e revalidada. Os testes novos comprovam consentimento separado, preflight antes de HTTP, recusa de provedor de síntese divergente, recomputação de cobertura e fluxo HTTP completo com analysis/synthesis fakes separados.
+
+A suíte não instala credencial nem faz requisição externa. Groq real, cotas e qualidade permanecem não validadas. PR segue Draft; sem merge/deploy automático. A adoção do Agent Protocol v2.2 está concluída na ref de trabalho; publicação central STAGING e integração em `main` continuam estados separados.

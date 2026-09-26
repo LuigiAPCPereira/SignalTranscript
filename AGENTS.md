@@ -1,13 +1,13 @@
 # AGENTS — SignalTranscript
 
-**Entrada operacional da branch consultada.** Estas instruções não concedem permissões, não substituem autorização do usuário e não implicam que o protocolo universal tenha sido adotado integralmente.
+**Entrada operacional da branch consultada.** O SignalTranscript adotou o Agent Development Protocol v2.2 na ref de trabalho mediante Adoption Gate verificado; isso não concede permissões, não implica merge em `main` e não transforma a distribuição central STAGING em release publicada. [Fonte/versionamento](docs/PROTOCOL_SOURCE.md) · [relatório de adoção](docs/ADOPTION_REPORT.md).
 
 ## Antes de trabalho substancial
 
 1. Confirmar repositório, branch/ref, HEAD e PRs efetivos; inspecionar worktree local somente se houver acesso real, nunca inferir via conector remoto.
 2. Ler [README](README.md), [PRD](PRD.md), [DESIGN](DESIGN.md), [TASKLIST](TASKLIST.md), [PROJECT_STATE](PROJECT_STATE.md) e ADRs pertinentes; confrontar estado documental com código/testes atuais.
-3. Consultar a versão **aprovada e de fato acessível** de `DOCUMENTATION_AND_CONTINUITY.md` e as fontes pertinentes `ENGINEERING_DNA.md` e `FRONTEND_DNA.md` antes de alterações substanciais. O snapshot v2.2 existente no ChatGPT Project não é prova de acesso em Codex, tarefas agendadas ou checkout. A [central do Notion](https://app.notion.com/p/3e18d9773fea81e0853ec74730b91073) foi observada em STAGING em 20/09/2026; revalidar publicação, versão, integridade e leitura por URL/ID; não promover STAGING a autoridade aprovada. Se não houver fonte acessível, declarar limite e trabalhar somente dentro do escopo seguro verificado.
-4. Não supor que uma cópia do Project seja igual à fonte editorial canônica; comparar versão/conteúdo/hashes quando houver fonte certificada. Não declarar verificação quando ela não ocorreu.
+3. Usar [docs/PROTOCOL_SOURCE.md](docs/PROTOCOL_SOURCE.md) para identificar a versão-fonte v2.2 adotada e sua evidência de integridade. Quando `DOCUMENTATION_AND_CONTINUITY.md`/DNA estiverem realmente acessíveis, consultar o original pertinente; nunca alegar leitura em host que não o possua.
+4. A central Notion v2.2 permanece STAGING como **distribuição editorial**, estado separado da adoção deste projeto. A cópia Project usada na adoção teve SHA-256 confrontado com os hashes de origem do manifesto central. Codex e tarefas agendadas não herdam esse acesso; devem recuperar GitHub e declarar fontes externas indisponíveis quando for o caso.
 
 ## Mapa documental — nove funções
 
@@ -21,7 +21,7 @@
 | Planejamento e marcos | [ROADMAP](ROADMAP.md) |
 | Histórico recuperável | [SESSION_LOG](SESSION_LOG.md) e commits/PRs reais |
 | Checkpoint | [PROJECT_STATE](PROJECT_STATE.md), vinculado a T-004 documental e T-010 técnico |
-| Instruções e protocolo | Este AGENTS e referência ao protocolo v2.2 ainda STAGING; equivalência/approval pendentes |
+| Instruções e protocolo | Este AGENTS + [pin/fonte v2.2](docs/PROTOCOL_SOURCE.md) + [Adoption Gate](docs/ADOPTION_REPORT.md); publicação central STAGING é separada |
 
 ## Implementação e validação
 
