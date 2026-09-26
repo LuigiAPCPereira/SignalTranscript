@@ -76,7 +76,7 @@ Nenhum dos dois caminhos comprova factualidade ou habilita deep links.
 
 O smoke nunca reenvia automaticamente análise ou síntese. Se houver timeout do POST de análise antes de receber job ID, o resultado é desconhecido. Se a síntese já tiver sido enviada e a resposta HTTP for perdida, também não deve ser repetida cegamente.
 
-Existe agora `GET /api/jobs/{id}/synthesis`, estritamente read-only: ele só devolve checkpoint global já persistido, valida a configuração e não chama o provedor. Quando não há resultado, responde `SYNTHESIS_NOT_FOUND`; a leitura não cria a tabela `global_syntheses`.
+Existe `GET /api/jobs/{id}/synthesis`, estritamente read-only: ele só devolve checkpoint global já persistido e não chama o provedor. A leitura usa `provider/model/revision` gravados com o próprio resultado, portanto não depende de um provedor de síntese estar configurado no servidor naquele momento. Quando não há resultado, responde `SYNTHESIS_NOT_FOUND`; a leitura não cria a tabela `global_syntheses`.
 
 Após timeout ou dúvida, consulte primeiro:
 
@@ -87,10 +87,10 @@ python -m signaltranscript.backend.smoke \
   --expect-synthesis-provider groq
 ```
 
-Esse modo usa somente `GET /api/config` + `GET /api/jobs/{id}/synthesis`, não pede consentimento de upload e não dispara inferência. Se nenhum checkpoint existir, decidir uma nova tentativa continua sendo ação humana explícita; o cliente não converte 404 em retry.
+Esse modo usa somente **um** `GET /api/jobs/{id}/synthesis`, não pede consentimento de upload e não dispara inferência. `--expect-synthesis-provider` é comparado com a identidade persistida retornada, não com a configuração viva do servidor. Se nenhum checkpoint existir, decidir uma nova tentativa continua sendo ação humana explícita; o cliente não converte 404 em retry.
 
 ## Evidência
 
-SHA `e6c159777f12c8f51a9ee085c07e5e1b062ba8a6`, GitHub Actions **36255131808**: PASS Python 3.12 e 3.13; **234 testes PASS**. A primeira revisão do GET (`488e31df`) falhou apenas no teste CLI por captura prematura do transport; a injeção foi corrigida e revalidada. Os testes novos comprovam consentimento separado, preflight antes de HTTP, recusa de provedor de síntese divergente, recomputação de cobertura e fluxo HTTP completo com analysis/synthesis fakes separados.
+SHA `43f6b135d962d09a93de460d5c94f61b4a5fe1f5`, GitHub Actions **36256244587**: PASS Python 3.12 e 3.13; **237 testes PASS**. A primeira revisão do GET (`488e31df`) falhou apenas no teste CLI por captura prematura do transport; a injeção foi corrigida e revalidada. Os testes novos comprovam consentimento separado, preflight antes de HTTP, recusa de provedor de síntese divergente, recomputação de cobertura e fluxo HTTP completo com analysis/synthesis fakes separados.
 
-A suíte não instala credencial nem faz requisição externa. Groq real, cotas e qualidade permanecem não validadas. PR segue Draft; sem merge/deploy automático; adoção do protocolo continua parcial.
+A suíte não instala credencial nem faz requisição externa. Groq real, cotas e qualidade permanecem não validadas. PR segue Draft; sem merge/deploy automático. A adoção do Agent Protocol v2.2 está concluída na ref de trabalho; publicação central STAGING e integração em `main` continuam estados separados.
