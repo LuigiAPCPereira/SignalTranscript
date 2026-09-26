@@ -1,6 +1,6 @@
 # PRD — SignalTranscript / MVP v0.1
 
-**Situação:** planejamento proposto em 2026-09-20; não há aplicativo funcional. Fonte das decisões: conversa do usuário; [README](README.md). [Inventário](TASKLIST.md) e [arquitetura](DESIGN.md).
+**Situação:** requisitos do MVP v0.1 vigentes; implementação parcial existe na pilha de PRs draft e ainda não está integrada à `main`. Fonte das decisões: conversa do usuário; [README](README.md). [Inventário](TASKLIST.md) e [arquitetura](DESIGN.md).
 
 ## Problema, público, jornada e limites
 
