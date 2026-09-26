@@ -22,6 +22,12 @@ Consultar `GET /api/jobs/{id}` e `GET /api/jobs/{id}/sections`. Se houver falha/
 
 Se `--synthesis-provider` foi escolhido explicitamente, `POST /api/jobs/{id}/synthesis` inicia a síntese global após as seções completas. Essa é uma segunda operação potencialmente remota e pode consumir cota; não é chamada pelo worker nem pelo GET. Repetição idêntica reutiliza checkpoint validado. Um resultado remoto desconhecido não gera retry automático. Não há endpoints de aquisição de URL/áudio ou transcrição neste recorte.
 
+### Smoke com consentimento separado
+
+O cliente operacional distingue os dois custos. Análise exige `--submit-analysis --confirm-analysis-upload --expect-analysis-provider NOME`. Síntese exige **adicionalmente** `--synthesize-global --confirm-synthesis-upload --expect-synthesis-provider NOME`. Todas as opções são verificadas antes do primeiro POST; se o segundo consentimento estiver incompleto, nenhuma análise é enviada.
+
+Consulte [T005_SMOKE_TEST](T005_SMOKE_TEST.md) para exemplos. O smoke revalida a configuração de síntese antes do segundo POST e recalcula a cobertura global a partir das referências recebidas.
+
 ## Backup e recovery staging offline
 
 O caminho de recuperação é deliberadamente **não destrutivo**: ele nunca substitui automaticamente o banco ativo. Primeiro crie/inspecione um snapshot pelas primitivas de `signaltranscript.backend.backup`; para preparar uma recuperação, escolha um **novo** caminho de destino e execute:
@@ -56,4 +62,4 @@ A leitura do receipt aceita somente arquivo regular pequeno, schema exato e vers
 
 ## Verificação
 
-`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes de runtime/smoke/recovery são offline e não fazem chamada autenticada à Groq. O checkpoint de recovery no SHA `ec627014fe5e038cc74e5fc8d09516dd3e62d26a` passou no GitHub Actions 35989071501. O adaptador/composição de síntese no SHA `1d78f93a52fbef6817374fd10ac7692d0901bcd5` passou no Actions **36245879695**, Python 3.12/3.13, com **227 testes** no log 3.13. Confirmar CI novamente no HEAD final do PR; um CI anterior não valida commits posteriores.
+`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes de runtime/smoke/recovery são offline e não fazem chamada autenticada à Groq. O checkpoint de recovery no SHA `ec627014fe5e038cc74e5fc8d09516dd3e62d26a` passou no GitHub Actions 35989071501. O adaptador/composição de síntese no SHA `1d78f93a52fbef6817374fd10ac7692d0901bcd5` passou no Actions 36245879695. O smoke com consentimento separado no SHA `93168c1d6a5038d6e5f70775500f6db5a9b80581` passou no Actions **36253734809**, Python 3.12/3.13, com **232 testes** em ambos os logs. Confirmar CI novamente no HEAD final do PR; um CI anterior não valida commits posteriores.
