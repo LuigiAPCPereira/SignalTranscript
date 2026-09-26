@@ -11,7 +11,7 @@ from dataclasses import asdict
 import fcntl
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from signaltranscript.ai.errors import ProviderFailure
@@ -64,6 +64,27 @@ def provenance_view(job: Job) -> dict[str, object]:
         "video_identity_status": evidence.video_identity_status if evidence is not None else "UNVERIFIED",
         "timeline_match_status": evidence.timeline_match_status if evidence is not None else "UNVERIFIED",
         "deep_links_allowed": False,
+    }
+
+
+def list_view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
+    completed = jobs.completed_sections(job.id)
+    sections_present, synthesis_present = jobs.artifact_presence(job.id)
+    return {
+        "id": job.id,
+        "video_id": job.transcript.video_id,
+        "state": job.state,
+        "provider": job.provider,
+        "model": job.model,
+        "attempts": job.attempts,
+        "planned_sections": job.section_count,
+        "completed_sections": completed,
+        "error_code": job.error_code,
+        "provenance": provenance_view(job),
+        "artifacts": {
+            "sections_present": sections_present,
+            "synthesis_present": synthesis_present,
+        },
     }
 
 
@@ -205,6 +226,18 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
             raise HTTPException(status_code=422, detail=str(exc)[:100]) from None
         wake.set()
         return view(jobs, job)
+
+    @app.get("/api/jobs")
+    async def list_jobs(
+        limit: int = Query(default=20, ge=1, le=50),
+        before: int | None = Query(default=None, ge=1),
+    ):
+        """Read-only newest-first local journal listing; never initiates provider work."""
+        items, next_before = jobs.list_jobs(limit=limit, before=before)
+        return {
+            "items": [list_view(jobs, job) for job in items],
+            "next_before": next_before,
+        }
 
     @app.get("/api/jobs/{job_id}")
     async def get_job(job_id: str):

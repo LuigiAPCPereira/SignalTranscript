@@ -18,12 +18,12 @@ from signaltranscript.ai.ports import Segment, Transcript
 from signaltranscript.backend.caption_evidence import CaptionEvidence, parse_manifest
 
 STATES = frozenset({"QUEUED", "RUNNING", "INTERRUPTED", "FAILED", "WAITING_RATE_LIMIT", "COMPLETED", "CANCELLED"})
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _JOB_REQUIRED_COLUMNS = frozenset({
     "id", "state", "transcript_json", "provider", "model", "revision",
     "max_chars", "section_count", "attempts", "error_code",
 })
-_JOB_CURRENT_COLUMNS = _JOB_REQUIRED_COLUMNS | {"evidence_json"}
+_JOB_CURRENT_COLUMNS = _JOB_REQUIRED_COLUMNS | {"evidence_json", "created_seq"}
 
 
 class JobConflict(ValueError):
@@ -42,6 +42,7 @@ class Job:
     section_count: int
     attempts: int
     error_code: str | None
+    created_seq: int
     evidence: CaptionEvidence | None = None
 
 
@@ -131,12 +132,34 @@ class SQLiteJobs:
                     section_count INTEGER NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     error_code TEXT,
-                    evidence_json TEXT)""")
+                    evidence_json TEXT,
+                    created_seq INTEGER NOT NULL)""")
                 columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
                 if "evidence_json" not in columns:
                     db.execute("ALTER TABLE jobs ADD COLUMN evidence_json TEXT")
-                # Historical databases predate user_version. The structural migration
-                # above is idempotent, so version 0 can be upgraded conservatively.
+                if "created_seq" not in columns:
+                    db.execute("ALTER TABLE jobs ADD COLUMN created_seq INTEGER NOT NULL DEFAULT 0")
+
+                # Persist a stable insertion sequence once. rowid is used only as a
+                # one-time migration ordering for legacy rows; API/worker contracts
+                # never expose or depend on rowid afterwards.
+                max_seq = db.execute(
+                    "SELECT COALESCE(MAX(created_seq), 0) FROM jobs"
+                ).fetchone()[0]
+                legacy = db.execute(
+                    "SELECT rowid,id FROM jobs WHERE created_seq=0 ORDER BY rowid"
+                ).fetchall()
+                for _, legacy_id in legacy:
+                    max_seq += 1
+                    db.execute(
+                        "UPDATE jobs SET created_seq=? WHERE id=?",
+                        (max_seq, legacy_id),
+                    )
+                db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_created_seq ON jobs(created_seq)"
+                )
+                # Historical databases predate user_version. Structural migrations
+                # above are idempotent, so older compatible journals upgrade safely.
                 db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         except sqlite3.DatabaseError as exc:
             # Do not expose SQLite's raw message or paths through callers. The
@@ -170,21 +193,71 @@ class SQLiteJobs:
         sections = plan_sections(transcript, max_chars=max_chars)
         job_id = uuid4().hex
         with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            created_seq = db.execute(
+                "SELECT COALESCE(MAX(created_seq), 0) + 1 FROM jobs"
+            ).fetchone()[0]
             db.execute("""INSERT INTO jobs
-                (id,state,transcript_json,provider,model,revision,max_chars,section_count,evidence_json)
-                VALUES (?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)""",
-                (job_id, payload, provider, model, revision, max_chars, len(sections), evidence_json))
+                (id,state,transcript_json,provider,model,revision,max_chars,section_count,
+                 evidence_json,created_seq)
+                VALUES (?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (job_id, payload, provider, model, revision, max_chars, len(sections),
+                 evidence_json, created_seq))
         return self.get(job_id)  # type: ignore[return-value]
+
+    @staticmethod
+    def _job(row: tuple[object, ...]) -> Job:
+        transcript = _transcript(row[2])
+        return Job(
+            id=row[0], state=row[1], transcript=transcript,
+            provider=row[3], model=row[4], revision=row[5], max_chars=row[6],
+            section_count=row[7], attempts=row[8], error_code=row[9],
+            created_seq=row[11], evidence=_evidence(row[10], transcript),
+        )
 
     def get(self, job_id: str) -> Job | None:
         with self._db() as db:
             row = db.execute("""SELECT id,state,transcript_json,provider,model,revision,
-                max_chars,section_count,attempts,error_code,evidence_json FROM jobs WHERE id=?""",
-                             (job_id,)).fetchone()
-        if row is None:
-            return None
-        transcript = _transcript(row[2])
-        return Job(row[0], row[1], transcript, *row[3:10], _evidence(row[10], transcript))
+                max_chars,section_count,attempts,error_code,evidence_json,created_seq
+                FROM jobs WHERE id=?""", (job_id,)).fetchone()
+        return None if row is None else self._job(row)
+
+    def list_jobs(self, *, limit: int = 20, before: int | None = None) -> tuple[tuple[Job, ...], int | None]:
+        """Newest-first stable local pagination by persisted insertion sequence."""
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("limit must be between 1 and 50")
+        if before is not None and (type(before) is not int or before <= 0):
+            raise ValueError("before must be a positive integer")
+        params: list[object] = []
+        where = ""
+        if before is not None:
+            where = "WHERE created_seq < ?"
+            params.append(before)
+        params.append(limit + 1)
+        with self._db() as db:
+            rows = db.execute(f"""SELECT id,state,transcript_json,provider,model,revision,
+                max_chars,section_count,attempts,error_code,evidence_json,created_seq
+                FROM jobs {where} ORDER BY created_seq DESC LIMIT ?""", params).fetchall()
+        page_rows = rows[:limit]
+        next_before = page_rows[-1][11] if len(rows) > limit and page_rows else None
+        return tuple(self._job(row) for row in page_rows), next_before
+
+    def artifact_presence(self, job_id: str) -> tuple[bool, bool]:
+        """Presence hints only; artifact endpoints perform integrity validation."""
+        with self._db() as db:
+            sections_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='analysis_sections'"
+            ).fetchone() is not None
+            synthesis_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_syntheses'"
+            ).fetchone() is not None
+            sections_present = bool(sections_table and db.execute(
+                "SELECT 1 FROM analysis_sections WHERE run_id=? LIMIT 1", (job_id,)
+            ).fetchone())
+            synthesis_present = bool(synthesis_table and db.execute(
+                "SELECT 1 FROM global_syntheses WHERE run_id=? LIMIT 1", (job_id,)
+            ).fetchone())
+        return sections_present, synthesis_present
 
     def completed_sections(self, job_id: str) -> int:
         with self._db() as db:
@@ -198,7 +271,9 @@ class SQLiteJobs:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM jobs WHERE state='RUNNING' LIMIT 1").fetchone():
                 return None
-            row = db.execute("SELECT id FROM jobs WHERE state='QUEUED' ORDER BY rowid LIMIT 1").fetchone()
+            row = db.execute(
+                "SELECT id FROM jobs WHERE state='QUEUED' ORDER BY created_seq LIMIT 1"
+            ).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE jobs SET state='RUNNING', attempts=attempts+1,error_code=NULL WHERE id=?", row)

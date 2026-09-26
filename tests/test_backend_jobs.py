@@ -124,6 +124,26 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(resumed.state, "QUEUED")
         self.assertEqual(self.jobs.claim_next().attempts, 2)
 
+
+    def test_list_jobs_uses_stable_created_sequence_and_fifo_claim(self):
+        created = [
+            self.jobs.enqueue(
+                Transcript(f"video-{i}", "manual_import", transcript().segments, language="en"),
+                provider="fake", model="test-model", revision="v1", max_chars=budget(),
+            )
+            for i in range(4)
+        ]
+        page1, cursor = self.jobs.list_jobs(limit=2)
+        self.assertEqual([job.id for job in page1], [created[3].id, created[2].id])
+        self.assertIsNotNone(cursor)
+        page2, next_cursor = self.jobs.list_jobs(limit=2, before=cursor)
+        self.assertEqual([job.id for job in page2], [created[1].id, created[0].id])
+        self.assertIsNone(next_cursor)
+        self.assertEqual([job.created_seq for job in created], [1, 2, 3, 4])
+
+        claimed = self.jobs.claim_next()
+        self.assertEqual(claimed.id, created[0].id)
+
     def test_provenance_is_persisted_and_old_database_migrates(self):
         record = parse_manifest(evidence(), body())
         job = self.jobs.enqueue(transcript(), provider="fake", model="test-model", revision="v1",
@@ -142,7 +162,37 @@ class JobStoreTests(unittest.TestCase):
         migrated.initialize()
         with sqlite3.connect(legacy) as db:
             columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            created_seq = db.execute("SELECT created_seq FROM jobs").fetchall()
         self.assertIn("evidence_json", columns)
+        self.assertIn("created_seq", columns)
+        self.assertEqual(version, 3)
+        self.assertEqual(created_seq, [])
+
+
+    def test_version_two_rows_receive_permanent_sequence_on_migration(self):
+        legacy = Path(self.tmp.name) / "v2.db"
+        with sqlite3.connect(legacy) as db:
+            db.execute("""CREATE TABLE jobs (
+                id TEXT PRIMARY KEY, state TEXT NOT NULL, transcript_json TEXT NOT NULL,
+                provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL,
+                max_chars INTEGER NOT NULL, section_count INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, error_code TEXT, evidence_json TEXT)""")
+            raw = json.dumps(asdict(transcript()), separators=(",", ":"))
+            for job_id in ("old-a", "old-b"):
+                db.execute("""INSERT INTO jobs
+                    (id,state,transcript_json,provider,model,revision,max_chars,section_count)
+                    VALUES (?, 'CANCELLED', ?, 'fake', 'test-model', 'v1', ?, 2)""",
+                    (job_id, raw, budget()))
+            db.execute("PRAGMA user_version=2")
+        migrated = SQLiteJobs(legacy)
+        migrated.initialize()
+        page, cursor = migrated.list_jobs(limit=10)
+        self.assertEqual([job.id for job in page], ["old-b", "old-a"])
+        self.assertEqual([job.created_seq for job in page], [2, 1])
+        self.assertIsNone(cursor)
+        with sqlite3.connect(legacy) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_transcript_and_input_limits(self):
         with self.assertRaises(ValueError):
@@ -196,6 +246,51 @@ class APIIntegrationTests(unittest.TestCase):
             self.assertNotIn("summary", result.json())
             self.assertEqual(client.get("/api/jobs/does-not-exist").status_code, 404)
         self.assertEqual(fake.calls, [("s1",), ("s2",)])
+
+
+    def test_job_listing_is_paginated_read_only_and_reports_artifact_presence(self):
+        fake = FakeProvider()
+        synthesis = FakeSynthesisProvider()
+        with TestClient(self.app(fake, synthesis=synthesis)) as client:
+            job_ids = []
+            for index in range(3):
+                payload = body()
+                payload["video_id"] = f"video-{index}"
+                created = client.post("/api/jobs", json=payload)
+                job_ids.append(created.json()["id"])
+                self.assertEqual(poll(client, job_ids[-1])["state"], "COMPLETED")
+
+            synthesis_result = client.post(f"/api/jobs/{job_ids[1]}/synthesis")
+            self.assertEqual(synthesis_result.status_code, 200, synthesis_result.text)
+            analysis_calls = len(fake.calls)
+            synthesis_calls = synthesis.calls
+
+            first = client.get("/api/jobs", params={"limit": 2})
+            self.assertEqual(first.status_code, 200, first.text)
+            first_payload = first.json()
+            self.assertEqual(
+                [item["id"] for item in first_payload["items"]],
+                [job_ids[2], job_ids[1]],
+            )
+            self.assertIsInstance(first_payload["next_before"], int)
+            self.assertTrue(first_payload["items"][0]["artifacts"]["sections_present"])
+            self.assertFalse(first_payload["items"][0]["artifacts"]["synthesis_present"])
+            self.assertTrue(first_payload["items"][1]["artifacts"]["synthesis_present"])
+            for item in first_payload["items"]:
+                self.assertNotIn("transcript", item)
+                self.assertFalse(item["provenance"]["deep_links_allowed"])
+
+            second = client.get(
+                "/api/jobs",
+                params={"limit": 2, "before": first_payload["next_before"]},
+            )
+            self.assertEqual([item["id"] for item in second.json()["items"]], [job_ids[0]])
+            self.assertIsNone(second.json()["next_before"])
+            self.assertEqual(len(fake.calls), analysis_calls)
+            self.assertEqual(synthesis.calls, synthesis_calls)
+
+            self.assertEqual(client.get("/api/jobs", params={"limit": 0}).status_code, 422)
+            self.assertEqual(client.get("/api/jobs", params={"before": 0}).status_code, 422)
 
     def test_caption_evidence_is_validated_and_persisted_without_enabling_links(self):
         fake = FakeProvider()
