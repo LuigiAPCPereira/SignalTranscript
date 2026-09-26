@@ -235,9 +235,10 @@ def execute_synthesis(
 
 def read_synthesis(
     *, port: int, job_id: str, transcript: Transcript, provider: str,
-    expect_evidence: bool = False, request=call,
+    expect_evidence: bool = False, request=None,
 ) -> SynthesisVerification:
     """Read an existing global checkpoint using GET only; never requests inference."""
+    request = call if request is None else request
     base = f"http://127.0.0.1:{port}"
     _, model = _synthesis_configuration(base, provider, request)
     result = request(base, "GET", f"/api/jobs/{job_id}/synthesis")
