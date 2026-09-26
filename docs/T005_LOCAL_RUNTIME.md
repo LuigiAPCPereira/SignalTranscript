@@ -8,7 +8,7 @@ Na branch deste PR (não na `main` ainda), criar um ambiente virtual Python 3.12
 
 A chave `GROQ_API_KEY` deve estar disponível **somente no ambiente local do processo**; não passá-la por argumento CLI, URL, commit, logs ou frontend. Em Bash, uma opção para digitar sem eco/histórico é `read -rsp 'Groq API key: ' GROQ_API_KEY; echo; export GROQ_API_KEY`. Não persistir credenciais em arquivos versionados.
 
-Iniciar explicitamente com `python -m signaltranscript.backend.serve --analysis-provider groq`. Opcionalmente `--data-dir /caminho/absoluto/privado` e `--port 8765`. O diretório existente precisa ser privado (`0700`) e não ser symlink; banco existente não pode ser symlink nem legível por grupo/outros (`0600`). Arquivos novos são criados sob `umask 077`. O servidor usa **somente 127.0.0.1**, um processo, sem reload, headers de proxy ou access logs; não é um serviço autenticado para publicação em rede ou exposição via túnel.
+Iniciar explicitamente com `python -m signaltranscript.backend.serve --analysis-provider groq`. A síntese global fica **desabilitada por padrão**; para registrá-la separadamente, acrescentar `--synthesis-provider groq`. Opcionalmente `--data-dir /caminho/absoluto/privado` e `--port 8765`. O diretório existente precisa ser privado (`0700`) e não ser symlink; banco existente não pode ser symlink nem legível por grupo/outros (`0600`). Arquivos novos são criados sob `umask 077`. O servidor usa **somente 127.0.0.1**, um processo, sem reload, headers de proxy ou access logs; não é um serviço autenticado para publicação em rede ou exposição via túnel.
 
 ## API mínima
 
@@ -18,7 +18,9 @@ Iniciar explicitamente com `python -m signaltranscript.backend.serve --analysis-
 {"video_id":"video-autorizado","source":"manual_import","language":"pt","segments":[{"id":"seg-1","text":"Texto transcrito com permissão.","start_ms":0,"end_ms":1000}]}
 ```
 
-Consultar `GET /api/jobs/{id}` e `GET /api/jobs/{id}/sections`. Se houver falha/interrupção, `POST /api/jobs/{id}/resume` é ato explícito: um timeout pode ter consumido recursos remotos. O resultado é `SECTIONS_ONLY`, nunca uma síntese global. Não há endpoints de aquisição de URL/áudio ou transcrição neste recorte.
+Consultar `GET /api/jobs/{id}` e `GET /api/jobs/{id}/sections`. Se houver falha/interrupção, `POST /api/jobs/{id}/resume` é ato explícito: um timeout pode ter consumido recursos remotos. A conclusão automática do worker continua sendo `SECTIONS_ONLY`.
+
+Se `--synthesis-provider` foi escolhido explicitamente, `POST /api/jobs/{id}/synthesis` inicia a síntese global após as seções completas. Essa é uma segunda operação potencialmente remota e pode consumir cota; não é chamada pelo worker nem pelo GET. Repetição idêntica reutiliza checkpoint validado. Um resultado remoto desconhecido não gera retry automático. Não há endpoints de aquisição de URL/áudio ou transcrição neste recorte.
 
 ## Backup e recovery staging offline
 
@@ -47,11 +49,11 @@ A leitura do receipt aceita somente arquivo regular pequeno, schema exato e vers
 
 ## Garantias e pendências
 
-- O registro contém nome/modelo/revisão/orçamento. A revisão Groq é um SHA-256 do modelo, prompt, schema, limite de saída e modo estruturado. Alterações semânticas na lógica do adaptador que não estejam nesse material exigem revisão explícita do contrato; o hash não detecta tudo.
+- Análise por seção e síntese têm registros/revisões separados. A revisão de análise cobre seu modelo/prompt/schema; a revisão de síntese cobre modelo, prompt, schema, limite local, limite de saída, política de seleção de evidências e modo estruturado. Alterações semânticas fora desse material ainda exigem revisão explícita.
 - Jobs enfileirados com configuração diferente da instância atual são interrompidos **antes de chamar o provedor**, sem fallback. Checkpoints concluídos só são reutilizados quando a identidade e a transcrição/plano conferem.
 - O cliente do provedor é fechado no shutdown do FastAPI. Isso não garante cancelamento remoto nem execução exatamente uma vez.
-- Groq real, limites da conta, qualidade da análise, privacidade operacional, modelo local/NIM, cutover/rollback de recuperação, retenção, cancelamento remoto, aquisição e ponta a ponta com vídeo continuam não validados. T-005 e T-010 permanecem parciais; adoção documental v2.2 permanece parcial enquanto a fonte central aprovada não estiver acessível.
+- Groq real, limites da conta, qualidade da análise/síntese, privacidade operacional, modelo local/NIM, cutover/rollback de recuperação, retenção, cancelamento remoto, aquisição e ponta a ponta com vídeo continuam não validados. T-005 e T-010 permanecem parciais; adoção documental v2.2 permanece parcial enquanto a fonte central aprovada não estiver acessível.
 
 ## Verificação
 
-`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes de runtime/smoke/recovery são offline e não fazem chamada autenticada à Groq. O checkpoint de recovery no SHA `ec627014fe5e038cc74e5fc8d09516dd3e62d26a` passou no GitHub Actions 35989071501 em Python 3.12/3.13. Confirmar CI novamente no HEAD final do PR; um CI anterior não valida commits posteriores.
+`python -m pip install -e '.[test]'`; `python -m compileall -q src tests`; `python -m unittest discover -s tests -v`. Os testes de runtime/smoke/recovery são offline e não fazem chamada autenticada à Groq. O checkpoint de recovery no SHA `ec627014fe5e038cc74e5fc8d09516dd3e62d26a` passou no GitHub Actions 35989071501. O adaptador/composição de síntese no SHA `1d78f93a52fbef6817374fd10ac7692d0901bcd5` passou no Actions **36245879695**, Python 3.12/3.13, com **227 testes** no log 3.13. Confirmar CI novamente no HEAD final do PR; um CI anterior não valida commits posteriores.

@@ -32,14 +32,37 @@ Quando configurado:
 
 Falhas conhecidas de provedor são reduzidas a códigos seguros. Resultado remoto desconhecido não é repetido automaticamente; uma nova tentativa exigiria outro POST explícito. Rate limit também não causa retry implícito.
 
+## Adaptador Groq de síntese — separado da análise por seção
+
+`ai/adapters/groq_synthesis.py` implementa `GlobalSynthesisProvider` sem reutilizar `GroqAnalysisAdapter`. O adaptador tem prompt, JSON Schema, orçamento, revisão e cliente próprios. `serve.py` registra síntese separadamente e só a constrói quando o operador informa `--synthesis-provider groq`; omitir esse argumento mantém a síntese desabilitada.
+
+O payload enviado à síntese não reenvia cegamente a transcrição inteira. Para cada seção concluída ele envia o resumo/ideias anteriores como **dados não confiáveis** e acrescenta texto original de segmentos selecionados por política determinística: primeiro, meio e último segmento da seção, mais todos os segmentos citados pelas ideias daquela seção. O resultado só pode citar IDs cujo texto foi realmente enviado ao sintetizador. Timestamps e caminhos locais não entram no payload.
+
+A política atual é `section-anchors-first-middle-last-plus-idea-refs-v1`. O limite local é 96.000 caracteres Unicode e é deliberadamente uma proteção própria do adaptador, **não** uma tradução de tokens/cota. A documentação Groq consultada em 2026-09-26 lista `openai/gpt-oss-120b` com janela de 131.072 tokens e suporte a Structured Outputs estrito; o contrato local continua menor e versionado para reduzir dependência do limite máximo do fornecedor.
+
+Fontes oficiais: https://console.groq.com/docs/model/openai/gpt-oss-120b e https://console.groq.com/docs/structured-outputs.
+
+## Composição e consentimento
+
+Análise por seção e síntese global são selecionadas independentemente. Exemplo operacional possível:
+
+```bash
+python -m signaltranscript.backend.serve \
+  --analysis-provider groq \
+  --synthesis-provider groq
+```
+
+Isso cria identidades/clientes separados, mesmo quando ambos usam Groq. Não há default de síntese, fallback ou promoção automática após `SECTIONS_ONLY`. O endpoint de síntese continua sendo um POST explícito e pode consumir cota quando um provedor remoto estiver configurado.
+
 ## Limites operacionais
 
-O `serve.py` normal **ainda não registra um provedor real de síntese** nesta fatia. Portanto, a nova fronteira está implementada e testada com fake, mas não significa GPT-OSS/Groq operacional para síntese global. Isso é intencional: registrar Groq exigirá um adaptador/prompt/orçamento próprios atrás de `GlobalSynthesisProvider`, sem reutilizar silenciosamente o contrato de análise de seção.
+O adaptador Groq de síntese está implementado e testado **offline com cliente injetado**. Não houve nesta revisão chamada autenticada, medição da cota da conta, avaliação de qualidade com vídeo real ou comparação semântica/factual. O limite de 96.000 caracteres não garante enquadramento em limites de tokens/rate limits de uma conta específica.
 
-Também permanecem pendentes verificação semântica das referências, avaliação de qualidade com vídeo autorizado, política de retry explícita para resultados remotos desconhecidos, frontend e E2E.
+Também permanecem pendentes provedor local/NIM real, política explícita para nova tentativa após resultado remoto desconhecido, frontend e E2E.
 
 ## Evidência
 
-A revisão de código `6016d041beb7bdbcbe12533ec86683016d36479d` passou no GitHub Actions **36244624678** em Python 3.12 e 3.13; o log Python 3.13 registrou **212 testes PASS**. Os testes novos comprovam: síntese somente após seções completas, ausência de provedor sem fallback, checkpoint reutilizado sem segunda chamada e resultado inválido não persistido.
+- `6016d041beb7bdbcbe12533ec86683016d36479d`: Actions 36244624678 PASS Python 3.12/3.13, 212 testes no log 3.13 — fronteira HTTP/checkpoint global.
+- `1d78f93a52fbef6817374fd10ac7692d0901bcd5`: Actions **36245879695** PASS Python 3.12/3.13, **227 testes PASS** no log 3.13 — adaptador Groq de síntese, política de evidência e composição independente.
 
 T-007 continua parcial e a adoção do protocolo continua parcial. Nenhum merge, deploy ou chamada autenticada/paga é evidência desta fatia.
