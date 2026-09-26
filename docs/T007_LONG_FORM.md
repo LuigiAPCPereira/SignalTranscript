@@ -1,27 +1,45 @@
-# T-007 — Análise de transcrições longas: seções e checkpoints
+# T-007 — Análise longa e síntese global explícita
 
-**Escopo:** planejamento/execução offline e persistência local de seções; não é o pipeline completo da T-007. PR #5 (`c0f35a6b`) é a base desta fatia. [TASKLIST](../TASKLIST.md) · [DESIGN](../DESIGN.md) · [Contrato de provedores](T010_PROVIDER_BOUNDARY.md).
+**Estado:** T-007 permanece **PARCIAL**. O repositório já possui planejamento por seções, checkpoints SQLite e um contrato separado de síntese global. Nesta revisão, a síntese passa a ter uma fronteira HTTP explícita e opcional; não é chamada automaticamente quando a análise por seções termina. [TASKLIST](../TASKLIST.md) · [DESIGN](../DESIGN.md) · [Contrato de provedores](T010_PROVIDER_BOUNDARY.md).
 
-## Seções e fronteiras
+## Seções e checkpoints
 
-- `ai/long_form.py` independe de Groq, FastAPI, SQLite e aquisição. Recebe um `AnalysisProvider` previamente selecionado; não há retry, fallback ou seleção automática de serviço.
-- `plan_sections` verifica o plano inteiro antes de chamadas remotas. Mantém segmentos completos e contíguos, IDs, texto, ordem, idioma, origem e timestamps. Um segmento isolado grande demais ou mais seções que o limite são erros explícitos, nunca truncamento.
-- `compact_source_chars` mede caracteres Unicode do envelope JSON compacto idioma/IDs/texto do adaptador Groq inicial: **não mede tokens nem garante cota/contexto**. Outros provedores devem fornecer seus próprios medidores e orçamento.
-- `analyze_in_sections` permanece utilizável sem banco. Uma rotina interna recebe um plano imutável e prefixo validado para que a retomada não replaneje silenciosamente. Mudança inesperada de modelo/provedor, referência inválida e falha parcial são tratadas explicitamente.
-- `SectionedAnalysis.section_summaries` e `collected_ideas` são **por seção**, nunca resumo global. Deduplicação somente exata; não converter resultado incompleto em análise completa.
+- `ai/long_form.py` planeja seções contíguas usando segmentos completos e preserva IDs, texto, idioma e timestamps. Não há truncamento silencioso nem fallback de provedor.
+- `ai/section_checkpoint.py` vincula cada run à transcrição/plano/provedor/modelo/revisão e salva somente prefixos válidos. Resultado remoto desconhecido permanece sem checkpoint.
+- `SectionedAnalysis.section_summaries` e `collected_ideas` são resultados por seção. Eles nunca são promovidos por concatenação a um resumo global.
+- O worker FastAPI continua marcando o job concluído como `SECTIONS_ONLY` quando todas as seções foram validadas. Isso não dispara nova chamada de IA.
 
-## Checkpoint SQLite — incremento nesta branch
+## Síntese global neutra
 
-- `ai/section_checkpoint.py` grava `analysis_runs` e `analysis_sections` no SQLite via `sqlite3` da biblioteca padrão. Requer `run_id`, provedor, modelo, `revision` da análise, transcrição e limite de seção. SHA-256 identifica a transcrição canônica (inclusive tempos e origem) e o plano efetivo. O mesmo `run_id` não pode ser reutilizado com identidade divergente; execuções/versionamentos diferentes usam IDs distintos.
-- **Responsabilidade do chamador:** atualizar `revision` quando prompt, esquema ou demais configurações relevantes mudarem. O código não detecta mudanças externas no serviço e não guarda chaves de API.
-- `open_and_load` rejeita índice não contíguo, dados inválidos, referências inexistentes e alterações de transcrição/plano/provedor antes de nova chamada de IA. `save` valida seção e referências, usa transação curta, impede sobrescrita diferente e permite repetição idêntica. Uma chamada remota com resposta perdida não gera checkpoint; a próxima execução poderá precisar repetir essa chamada e consumir nova cota.
-- `analyze_with_checkpoint` reutiliza o prefixo validado e chama a porta neutra somente para o restante. Erro conhecido mantém resultado parcial, e erro de disco/programação se propaga. Não existe transação aberta durante chamadas de rede.
-- **Limite explícito:** pressupõe somente um executor ativo por `run_id`. Ainda não há lease/reivindicação multiworker, worker persistente, API, armazenamento de transcrição/áudio, backup, limpeza, cancelamento ou integração E2E. A T-005 permanece dependente das suas próprias condições de aceite.
+- `ai/synthesis.py` define `GlobalSynthesisProvider`, separado de `AnalysisProvider`. Assim, a síntese global pode usar um provedor/modelo diferente da análise por seções sem contaminar o domínio com Groq.
+- `synthesize_global` só aceita seções completas e com cobertura ordenada exata da transcrição. A saída precisa usar referências de segmentos originais; para transcrições com pelo menos três segmentos, a política padrão exige evidência estrutural de início, meio e fim.
+- Cobertura posicional é **evidência estrutural**, não verificação semântica ou factual.
+- `ai/synthesis_checkpoint.py` persiste uma síntese global versionada por run/transcrição/plano/provedor/modelo/revisão. Replay idêntico é reutilizado; rewrite divergente, resultado inválido e configuração alterada falham fechado.
 
-## Pendências de qualidade
+## Fronteira HTTP — incremento atual
 
-Não há sobreposição entre seções neste estágio. Síntese global representativa, checagem semântica de referências, cobertura real início/meio/fim, configurações operacionais por função e testes com IA remota são pendentes. Um arquivo SQLite de seções não é biblioteca funcional e não equivale a execução exatamente uma vez. T-007 segue parcial; adoção do protocolo não se altera por esta implementação.
+`create_app` aceita opcionalmente um `GlobalSynthesisProvider` com identidade explícita (`provider/model/revision`). Se não houver provedor configurado, `POST /api/jobs/{job_id}/synthesis` responde conflito seguro e **não escolhe Groq ou outro fornecedor automaticamente**.
+
+Quando configurado:
+
+1. o endpoint exige que o job esteja `COMPLETED` em `SECTIONS_ONLY`;
+2. reabre e valida todas as seções antes da síntese;
+3. usa `SQLiteGlobalSynthesisCheckpoint`;
+4. faz no máximo uma chamada não checkpointada por vez no processo local;
+5. um segundo POST com a mesma configuração reutiliza o resultado persistido, sem nova chamada;
+6. resposta usa `result_kind=GLOBAL_SYNTHESIS` e não modifica o resultado de seções;
+7. proveniência temporal continua independente: síntese global não habilita deep links.
+
+Falhas conhecidas de provedor são reduzidas a códigos seguros. Resultado remoto desconhecido não é repetido automaticamente; uma nova tentativa exigiria outro POST explícito. Rate limit também não causa retry implícito.
+
+## Limites operacionais
+
+O `serve.py` normal **ainda não registra um provedor real de síntese** nesta fatia. Portanto, a nova fronteira está implementada e testada com fake, mas não significa GPT-OSS/Groq operacional para síntese global. Isso é intencional: registrar Groq exigirá um adaptador/prompt/orçamento próprios atrás de `GlobalSynthesisProvider`, sem reutilizar silenciosamente o contrato de análise de seção.
+
+Também permanecem pendentes verificação semântica das referências, avaliação de qualidade com vídeo autorizado, política de retry explícita para resultados remotos desconhecidos, frontend e E2E.
 
 ## Evidência
 
-Testes locais: `PYTHONPATH=src python -m unittest discover -s tests -q` (32 testes de fatias: 17 existentes e 15 novos) e `python -m compileall -q src tests`; arquivos publicados devem ter seus hashes e CI na ref exata revalidados. Casos novos: reinício com reaproveitamento de seções, resultado completo sem chamadas duplicadas, timeout desconhecido, mudanças de conteúdo/tempos/plano/revisão/provedor, corrupção de payload/referências/ordem, gravação idempotente, erro de armazenamento e preflight sem criar banco. Testes sem SDK, secrets ou rede. CI da suíte inteira é um aceite distinto, a ser registrado no HEAD final.
+A revisão de código `6016d041beb7bdbcbe12533ec86683016d36479d` passou no GitHub Actions **36244624678** em Python 3.12 e 3.13; o log Python 3.13 registrou **212 testes PASS**. Os testes novos comprovam: síntese somente após seções completas, ausência de provedor sem fallback, checkpoint reutilizado sem segunda chamada e resultado inválido não persistido.
+
+T-007 continua parcial e a adoção do protocolo continua parcial. Nenhum merge, deploy ou chamada autenticada/paga é evidência desta fatia.
