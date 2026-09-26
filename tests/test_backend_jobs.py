@@ -225,13 +225,28 @@ class APIIntegrationTests(unittest.TestCase):
                     self.assertEqual(client.post("/api/jobs", json=invalid).status_code, 422)
 
 
-    def test_global_synthesis_is_explicit_checkpointed_and_never_changes_section_result(self):
+    def test_global_synthesis_is_explicit_checkpointed_and_readable_without_new_call(self):
         section_provider = FakeProvider()
         synthesis_provider = FakeSynthesisProvider()
         with TestClient(self.app(section_provider, synthesis=synthesis_provider)) as client:
             created = client.post("/api/jobs", json=body())
             job_id = created.json()["id"]
             self.assertEqual(poll(client, job_id)["result_kind"], "SECTIONS_ONLY")
+
+            with sqlite3.connect(self.path) as db:
+                before_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_syntheses'"
+                ).fetchone()
+            self.assertIsNone(before_table)
+            missing = client.get(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(missing.status_code, 404)
+            self.assertEqual(missing.json()["detail"], "SYNTHESIS_NOT_FOUND")
+            self.assertEqual(synthesis_provider.calls, 0)
+            with sqlite3.connect(self.path) as db:
+                after_read_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_syntheses'"
+                ).fetchone()
+            self.assertIsNone(after_read_table)
 
             first = client.post(f"/api/jobs/{job_id}/synthesis")
             self.assertEqual(first.status_code, 200, first.text)
@@ -240,6 +255,11 @@ class APIIntegrationTests(unittest.TestCase):
             self.assertEqual(payload["analysis"]["summary"], "Global summary")
             self.assertEqual(payload["analysis"]["provider"], "synth-fake")
             self.assertFalse(payload["provenance"]["deep_links_allowed"])
+
+            read_only = client.get(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(read_only.status_code, 200, read_only.text)
+            self.assertEqual(read_only.json(), payload)
+            self.assertEqual(synthesis_provider.calls, 1)
 
             second = client.post(f"/api/jobs/{job_id}/synthesis")
             self.assertEqual(second.status_code, 200, second.text)

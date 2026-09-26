@@ -211,21 +211,38 @@ def verify_global_synthesis(
     return SynthesisVerification(len(analysis["ideas"]), expected_coverage)
 
 
+def _synthesis_configuration(base: str, provider: str, request) -> tuple[dict, str]:
+    configuration = request(base, "GET", "/api/config")
+    if (configuration.get("synthesis_provider") != provider
+            or not isinstance(configuration.get("synthesis_model"), str)
+            or not configuration["synthesis_model"].strip()):
+        raise SmokeFailure("SYNTHESIS_PROVIDER_CONFIGURATION_MISMATCH")
+    return configuration, configuration["synthesis_model"]
+
+
 def execute_synthesis(
     *, port: int, job_id: str, transcript: Transcript, provider: str,
     expect_evidence: bool = False, request=call,
 ) -> SynthesisVerification:
     """Run exactly one explicit synthesis request after verifying local configuration."""
     base = f"http://127.0.0.1:{port}"
-    configuration = request(base, "GET", "/api/config")
-    if (configuration.get("synthesis_provider") != provider
-            or not isinstance(configuration.get("synthesis_model"), str)
-            or not configuration["synthesis_model"].strip()):
-        raise SmokeFailure("SYNTHESIS_PROVIDER_CONFIGURATION_MISMATCH")
+    _, model = _synthesis_configuration(base, provider, request)
     result = request(base, "POST", f"/api/jobs/{job_id}/synthesis")
     return verify_global_synthesis(
-        result, transcript, job_id, provider, configuration["synthesis_model"],
-        expect_evidence,
+        result, transcript, job_id, provider, model, expect_evidence,
+    )
+
+
+def read_synthesis(
+    *, port: int, job_id: str, transcript: Transcript, provider: str,
+    expect_evidence: bool = False, request=call,
+) -> SynthesisVerification:
+    """Read an existing global checkpoint using GET only; never requests inference."""
+    base = f"http://127.0.0.1:{port}"
+    _, model = _synthesis_configuration(base, provider, request)
+    result = request(base, "GET", f"/api/jobs/{job_id}/synthesis")
+    return verify_global_synthesis(
+        result, transcript, job_id, provider, model, expect_evidence,
     )
 
 
@@ -284,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Section-analysis provider configured on the local server")
     parser.add_argument("--synthesize-global", action="store_true",
                         help="After sections complete, allow ONE explicit global-synthesis POST")
+    parser.add_argument("--check-synthesis-job",
+                        help="Read an already persisted synthesis by job ID using GET only")
     parser.add_argument("--confirm-synthesis-upload", action="store_true",
                         help="Separately acknowledge synthesis may send data and consume additional quota")
     parser.add_argument("--expect-synthesis-provider",
@@ -297,6 +316,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Pré-validação local: {len(transcript.segments)} segmentos; nenhum texto exibido.")
         if has_evidence:
             print("Manifesto de proveniência validado localmente; vídeo/sincronização continuam NÃO verificados.")
+
+        check_mode = args.check_synthesis_job is not None
+        if check_mode:
+            if (not JOB_ID.fullmatch(args.check_synthesis_job)
+                    or not args.expect_synthesis_provider
+                    or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}",
+                                        args.expect_synthesis_provider)
+                    or args.submit_analysis or args.confirm_analysis_upload
+                    or args.expect_analysis_provider or args.synthesize_global
+                    or args.confirm_synthesis_upload
+                    or not 1 <= args.port <= 65535):
+                raise SmokeFailure("INVALID_SYNTHESIS_CHECK_OPTIONS")
+            verification = read_synthesis(
+                port=args.port, job_id=args.check_synthesis_job,
+                transcript=transcript, provider=args.expect_synthesis_provider,
+                expect_evidence=has_evidence,
+            )
+            coverage = verification.positional_coverage
+            print(
+                f"Checkpoint GLOBAL_SYNTHESIS encontrado para job {args.check_synthesis_job}: "
+                f"{verification.idea_count} ideia(s); "
+                f"início={'sim' if coverage.beginning_referenced else 'não'}, "
+                f"meio={'sim' if coverage.middle_referenced else 'não'}, "
+                f"fim={'sim' if coverage.end_referenced else 'não'}."
+            )
+            print("Consulta somente leitura; nenhuma nova inferência foi solicitada.")
+            return 0
 
         synthesis_options_used = bool(
             args.synthesize_global or args.confirm_synthesis_upload

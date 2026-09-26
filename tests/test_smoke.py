@@ -15,7 +15,7 @@ from signaltranscript.backend.serve import (
     AnalysisRegistration, SynthesisRegistration, build_app,
 )
 from signaltranscript.backend.smoke import (
-    SmokeFailure, execute, execute_synthesis, load_fixture, main,
+    SmokeFailure, execute, execute_synthesis, load_fixture, main, read_synthesis,
     verify_global_synthesis, verify_sections,
 )
 
@@ -170,6 +170,76 @@ class SmokeTests(unittest.TestCase):
             verify_global_synthesis(
                 result, self.transcript, "job-1", "synth-fake", "synth-model",
             )
+
+
+    def test_read_synthesis_uses_get_only_and_revalidates_configuration(self):
+        calls = iter([
+            {
+                "analysis_provider": "fake", "model": "example-model",
+                "result_kind": "SECTIONS_ONLY",
+                "synthesis_provider": "synth-fake", "synthesis_model": "synth-model",
+            },
+            {
+                "job_id": "job-1",
+                "result_kind": "GLOBAL_SYNTHESIS",
+                "analysis": {
+                    "summary": "Resumo global",
+                    "ideas": [{
+                        "title": "Tema", "explanation": "Explicação",
+                        "source_segment_ids": ["s1"],
+                    }],
+                    "provider": "synth-fake", "model": "synth-model",
+                },
+                "coverage": {
+                    "total_segments": 1, "referenced_segments": 1,
+                    "beginning_referenced": True, "middle_referenced": False,
+                    "end_referenced": False,
+                },
+                "provenance": provenance(),
+            },
+        ])
+        request = Mock(side_effect=lambda *args: next(calls))
+        verified = read_synthesis(
+            port=8765, job_id="job-1", transcript=self.transcript,
+            provider="synth-fake", request=request,
+        )
+        self.assertEqual(verified.idea_count, 1)
+        self.assertEqual([call.args[1] for call in request.call_args_list], ["GET", "GET"])
+
+    def test_cli_check_synthesis_requires_no_upload_consent_and_never_posts(self):
+        result = {
+            "job_id": "job-1",
+            "result_kind": "GLOBAL_SYNTHESIS",
+            "analysis": {
+                "summary": "Resumo global",
+                "ideas": [{
+                    "title": "Tema", "explanation": "Explicação",
+                    "source_segment_ids": ["s1"],
+                }],
+                "provider": "synth-fake", "model": "synth-model",
+            },
+            "coverage": {
+                "total_segments": 1, "referenced_segments": 1,
+                "beginning_referenced": True, "middle_referenced": False,
+                "end_referenced": False,
+            },
+            "provenance": provenance(),
+        }
+        with patch("signaltranscript.backend.smoke.call") as request:
+            request.side_effect = [
+                {
+                    "analysis_provider": "fake", "model": "example-model",
+                    "result_kind": "SECTIONS_ONLY",
+                    "synthesis_provider": "synth-fake", "synthesis_model": "synth-model",
+                },
+                result,
+            ]
+            self.assertEqual(main([
+                "--transcript", str(self.path),
+                "--check-synthesis-job", "job-1",
+                "--expect-synthesis-provider", "synth-fake",
+            ]), 0)
+            self.assertEqual([call.args[1] for call in request.call_args_list], ["GET", "GET"])
 
     def test_bad_transcript_rejected_offline(self):
         self.path.write_text('''{"video_id":"synthetic", "source":"manual_import",

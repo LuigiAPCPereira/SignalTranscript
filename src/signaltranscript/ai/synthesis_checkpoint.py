@@ -122,19 +122,35 @@ class SQLiteGlobalSynthesisCheckpoint:
             raise SynthesisCheckpointMismatch("INSUFFICIENT_POSITIONAL_COVERAGE")
         return GlobalSynthesis(analysis, coverage)
 
+    def _load_from(self, conn: sqlite3.Connection) -> GlobalSynthesis | None:
+        row = conn.execute("""SELECT schema_version, fingerprint, provider, model,
+                              revision, payload FROM global_syntheses WHERE run_id=?""",
+                           (self.run_id,)).fetchone()
+        if row is None:
+            return None
+        expected = (SCHEMA_VERSION, self.fingerprint, self.provider, self.model, self.revision)
+        if row[:5] != expected:
+            raise SynthesisCheckpointMismatch("RUN_CONFIGURATION_CHANGED")
+        return self._validate(_restore_analysis(row[5]))
+
     def load(self) -> GlobalSynthesis | None:
-        """Return a validated immutable result, or None when none was saved."""
+        """Return a validated result, creating checkpoint schema when needed by writers."""
         conn = self._connect()
         try:
-            row = conn.execute("""SELECT schema_version, fingerprint, provider, model,
-                                  revision, payload FROM global_syntheses WHERE run_id=?""",
-                               (self.run_id,)).fetchone()
-            if row is None:
+            return self._load_from(conn)
+        finally:
+            conn.close()
+
+    def load_existing(self) -> GlobalSynthesis | None:
+        """Read an already persisted result without DDL or provider calls."""
+        conn = sqlite3.connect(self.path, timeout=5)
+        try:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_syntheses'"
+            ).fetchone()
+            if table is None:
                 return None
-            expected = (SCHEMA_VERSION, self.fingerprint, self.provider, self.model, self.revision)
-            if row[:5] != expected:
-                raise SynthesisCheckpointMismatch("RUN_CONFIGURATION_CHANGED")
-            return self._validate(_restore_analysis(row[5]))
+            return self._load_from(conn)
         finally:
             conn.close()
 
