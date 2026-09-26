@@ -1,18 +1,19 @@
 # DESIGN — SignalTranscript v0.1
 
-**Estado:** proposta de arquitetura, não implementação. **Decidido:** backend Python + FastAPI; Groq Whisper Large V3 Turbo. **Proposto:** React/TypeScript, SQLite, yt-dlp/FFmpeg, GPT-OSS 120B, worker local. [Requisitos](PRD.md) · [Tarefas](TASKLIST.md) · [ADR backend](docs/adr/ADR-001-python-fastapi.md).
+**Estado:** arquitetura v0.1 parcialmente implementada na pilha de PRs draft. **Implementado offline:** Python/FastAPI, SQLite/jobs/checkpoints, worker local, portas independentes, adaptadores Groq STT/análise/síntese, análise por seções e síntese global explícita. **Ainda proposto/pendente:** React/TypeScript, aquisição yt-dlp/FFmpeg condicionada a autorização, biblioteca/UI completas. [Requisitos](PRD.md) · [Tarefas](TASKLIST.md) · [ADR backend](docs/adr/ADR-001-python-fastapi.md) · [independência](docs/adr/ADR-002-provider-independence.md).
 
 ## Topologia e fronteiras
 
 ```text
-React/TypeScript [proposto] --HTTP localhost--> FastAPI [decidido]
-                                                 |
-                                    orquestração / jobs
-                            _________|__________|__________
-                           |         |          |          |
-                      aquisição  transcrição  análise    biblioteca
-                       yt-dlp     Groq ASR    Groq LLM     SQLite
-                       FFmpeg     [decidido] [proposto] [proposto]
+React/TypeScript [pendente] --HTTP localhost--> FastAPI [implementado em branch]
+                                                   |
+                                      jobs/worker/checkpoints
+                            ___________|____________|____________
+                           |           |            |            |
+                      aquisição    transcrição   análise longa   persistência
+                    [pendente]     Groq STT      seções +       SQLite
+                     yt-dlp/       adapter       síntese global  [implementado]
+                     FFmpeg        [offline]     [offline]
 ```
 
 Monólito modular: domínio e contratos não importam FastAPI, yt_dlp, Groq ou banco; adaptadores implementam portas e o ponto de composição injeta dependências. A API nunca guarda segredos no frontend ou bloqueia requisições durante o processamento. Um worker com estado persistido substitui jobs apenas em memória. Não criar microserviços, Redis ou Celery sem necessidade medida.
@@ -59,7 +60,7 @@ Extrair ideias em blocos com sobreposição e IDs preservados, consolidar sem ex
 
 Estados: `QUEUED -> INSPECTING -> ACQUIRING -> [TRANSCRIBING] -> NORMALIZING -> ANALYZING -> COMPLETED`; alternativas `WAITING_SOURCE`, `WAITING_RATE_LIMIT`, `FAILED`, `CANCELLED`. Persistir etapa, tentativa, datas, erro sanitizado e referências de artefatos. No reinício, verificar integridade do artefato antes de pular etapa; resultado de requisição remota perdida é `UNKNOWN_REMOTE_OUTCOME`, não sucesso. Reivindicação transacional evita dois workers locais executarem mesmo job; nenhuma transação SQLite fica aberta em chamadas de rede. Cancelamento cooperativo não presume cancelamento da API.
 
-Banco SQLite (proposto): vídeos, fontes, transcrições e segmentos, análises/ideias/referências e jobs/tentativas; migrações e chaves estrangeiras; transações breves e política de backup compatível com WAL. Retenção de áudio ainda aberta. Busca simples inicialmente.
+SQLite já é usado na branch para jobs, checkpoints de seções/síntese e mecanismos de backup/recovery staging. O schema completo de biblioteca (vídeos/fontes/transcrições/versões/pesquisa) continua pendente. Retenção de áudio permanece aberta.
 
 API HTTP proposta: `POST /api/videos`, `GET /api/videos`, `GET /api/videos/{id}`, `POST /api/videos/{id}/process`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/cancel`, `GET /api/videos/{id}/transcript`, `GET /api/videos/{id}/analysis`. Entrada binária precisa de contrato multipart separado; endpoints citados não implicam que uploads já estejam definidos. A UI consulta progresso por polling moderado.
 
@@ -67,6 +68,6 @@ API HTTP proposta: `POST /api/videos`, `GET /api/videos`, `GET /api/videos/{id}`
 
 Secrets somente no backend, nunca no bundle, banco de vídeos ou logs. Tratar transcrição como conteúdo não confiável; não dar ferramentas, execução do sistema ou secrets ao LLM. Validar URLs, redirecionamentos, paths, arquivos e comandos de FFmpeg; sem concatenar shell. Rate-limit e falhas não geram sucesso aparente.
 
-Aceites técnicos: teste Groq com timestamps reais; importação sem timestamps não cria link; chunking preserva offsets e fronteiras; erros 429/401/403 e URL inválida visíveis; reinício após transcrição não apaga artefatos; referências estrangeiras rejeitadas; E2E autorizado até biblioteca. **Nada disso foi executado nesta etapa.**
+Aceites técnicos: teste Groq com timestamps reais; importação sem timestamps não cria link; chunking preserva offsets e fronteiras; erros 429/401/403 e URL inválida visíveis; reinício após transcrição não apaga artefatos; referências estrangeiras rejeitadas; E2E autorizado até biblioteca. Vários contratos estruturais já possuem testes offline/CI; chamada Groq autenticada, aquisição real, qualidade semântica e E2E autorizado até biblioteca continuam pendentes.
 
 Fontes documentais (consultadas anteriormente em 20/09/2026): https://github.com/yt-dlp/yt-dlp · https://console.groq.com/docs/speech-to-text · https://console.groq.com/docs/structured-outputs · https://console.groq.com/docs/rate-limits · https://fastapi.tiangolo.com/tutorial/background-tasks/ · https://www.sqlite.org/wal.html · https://developers.google.com/youtube/v3/docs/captions/download · https://www.youtube.com/t/terms
