@@ -62,7 +62,9 @@ Estados: `QUEUED -> INSPECTING -> ACQUIRING -> [TRANSCRIBING] -> NORMALIZING -> 
 
 SQLite já é usado na branch para jobs, checkpoints de seções/síntese e mecanismos de backup/recovery staging. O schema completo de biblioteca (vídeos/fontes/transcrições/versões/pesquisa) continua pendente. Retenção de áudio permanece aberta.
 
-API HTTP proposta: `POST /api/videos`, `GET /api/videos`, `GET /api/videos/{id}`, `POST /api/videos/{id}/process`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/cancel`, `GET /api/videos/{id}/transcript`, `GET /api/videos/{id}/analysis`. Entrada binária precisa de contrato multipart separado; endpoints citados não implicam que uploads já estejam definidos. A UI consulta progresso por polling moderado.
+**API de jobs implementada na branch:** `POST /api/jobs`, `GET /api/jobs` paginado, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/sections`, `POST /api/jobs/{id}/resume`, `POST /api/jobs/{id}/cancel`, `POST /api/jobs/{id}/synthesis` e `GET /api/jobs/{id}/synthesis`. A listagem expõe metadados/proveniência e presença de artefatos, nunca inicia IA.
+
+**API de biblioteca ainda proposta:** endpoints de vídeo/biblioteca, transcript read-only, busca e análise por vídeo. Entrada binária precisa de contrato multipart separado. A futura UI deve usar polling moderado e não interpretar presença de artefato como validação de integridade.
 
 ## Segurança e testes exigidos
 

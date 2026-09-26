@@ -1,21 +1,68 @@
-# T-005 — API local e worker recuperável: fatias parciais
+# T-005 — API local, journal e worker recuperável
 
-**Estado:** implementação parcial em [PR #7](https://github.com/LuigiAPCPereira/SignalTranscript/pull/7) (API/worker) e [PR #8](https://github.com/LuigiAPCPereira/SignalTranscript/pull/8) (composição local opt-in). São PRs empilhados ainda não integrados à `main`. [TASKLIST](../TASKLIST.md) · [Checkpoint](../PROJECT_STATE.md) · [Arquitetura](../DESIGN.md) · [Execução](T005_LOCAL_RUNTIME.md).
+**Estado:** implementação **PARCIAL** na pilha de PRs Draft, com incremento atual no PR #10. A `main` não contém estas funcionalidades. [TASKLIST](../TASKLIST.md) · [Checkpoint](../PROJECT_STATE.md) · [Arquitetura](../DESIGN.md) · [Runtime](T005_LOCAL_RUNTIME.md).
 
-## API e execução de tarefas
+## Journal SQLite e ordenação
 
-`backend/jobs.py` persiste `Job` e transcrição importada em SQLite (WAL), pré-valida o plano de seções e usa transação `BEGIN IMMEDIATE` para reivindicar somente um job em `RUNNING`. `backend/api.py` fornece `create_app(db_path, analysis_provider=..., provider_name=..., model=..., revision=..., max_chars=...)`, exigindo um `AnalysisProvider` selecionado, sem provedor padrão, chamadas ocultas, retry ou fallback. O FastAPI inicia o worker com `lifespan`. No Linux, `flock` exclusivo no arquivo vizinho ao banco rejeita um segundo processo para esse banco; **não** é lease multiworker nem suporte a `uvicorn --workers N`.
+`backend/jobs.py` persiste jobs e a transcrição importada em SQLite/WAL. O schema atual é **v3**. `created_seq` é uma sequência monotônica persistida:
 
-Entrada atual: `POST /api/jobs` recebe **transcrição importada**, não URL/áudio. `GET /api/jobs/{id}` exibe progresso; `GET /api/jobs/{id}/sections` entrega seções, **não resumo global**; `POST /api/jobs/{id}/resume` exige ação explícita. Erros são códigos seguros, sem resposta bruta do SDK. Não há autenticação de serviço público: não expor à rede nem a túneis.
+- jobs novos recebem `MAX(created_seq)+1` dentro de `BEGIN IMMEDIATE`;
+- migração de bancos compatíveis antigos atribui uma sequência uma única vez, usando `rowid` apenas como ordem de migração;
+- depois da migração, nenhum contrato de API/worker depende de `rowid`;
+- índice único protege a sequência;
+- o worker reivindica `QUEUED` em `created_seq ASC` (FIFO);
+- listagem usa `created_seq DESC` (mais recentes primeiro).
 
-Ao iniciar, jobs `RUNNING` antigos viram `INTERRUPTED/REMOTE_OUTCOME_UNKNOWN`, sem retransmissão automática. Jobs `QUEUED` somente seguem quando sua configuração gravada coincide com provedor/modelo/revisão/orçamento da instância atual; se divergir, viram `INTERRUPTED/CONFIGURATION_CHANGED` **antes de enviar a transcrição**. Retomada manual exige identidade idêntica; `SQLiteSectionCheckpoint` verifica hash de transcrição/plano e reutiliza somente seções gravadas. Sem transação aberta durante IA; shutdown cooperativo não garante cancelamento remoto.
+O journal continua fail-closed para schema futuro/incompatível e integridade SQLite inválida. Backup/recovery staging e recibos estão documentados separadamente em [T005_RECOVERY](T005_RECOVERY.md).
 
-## Composição operacional proposta
+## API implementada nesta branch
 
-O PR #8 acrescenta `backend/serve.py`: seleção obrigatória `--analysis-provider groq`, bind `127.0.0.1`, um processo, SDK opcional de Groq, revisão por hash de prompt/schema/modelo/limite de saída, diretório e banco privados, fechamento assíncrono do cliente. Veja [comandos, privacidade e exemplos](T005_LOCAL_RUNTIME.md). Groq é o primeiro registro; novas integrações devem implementar a porta neutra e adicionar registro explícito, jamais fallback silencioso. Isso torna o backend **iniciável**, mas não comprova sucesso de uma chamada autenticada.
+A aplicação é local, bindada em `127.0.0.1` pelo composition root e sem autenticação para exposição pública. Não usar túnel/rede externa.
 
-## Verificação e exclusões
+Operações atuais:
 
-Executar `python -m pip install -e '.[test]'`, `python -m compileall -q src tests` e `PYTHONPATH=src python -m unittest discover -s tests -v`. [CI PR #7 final](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35552807725): `success` em Python 3.12/3.13. [CI PR #8 código](https://github.com/LuigiAPCPereira/SignalTranscript/actions/runs/35554172636): `success` Python 3.12/3.13; log 3.13 com **97 testes PASS**, incluindo nove de composição. Verificar CI novamente se HEAD mudar; nenhum teste usa Groq real/credenciais.
+- `POST /api/jobs` — registra **transcrição importada**, não URL/áudio;
+- `GET /api/jobs?limit=20&before=N` — lista journal newest-first, `limit` 1–50;
+- `GET /api/jobs/{id}` — estado/progresso;
+- `GET /api/jobs/{id}/sections` — resultado por seções;
+- `POST /api/jobs/{id}/resume` — retomada explícita;
+- `POST /api/jobs/{id}/cancel` — cancelamento conservador; não declara cancelamento remoto de trabalho `RUNNING`;
+- `POST /api/jobs/{id}/synthesis` — síntese global explícita quando provider está configurado;
+- `GET /api/jobs/{id}/synthesis` — leitura histórica read-only, independente da configuração atual de provider.
 
-**Limites:** sem aquisição YouTube, upload binário, job STT real, migrações/backup, cancelamento por endpoint, espera automática de rate-limit, multiworker, síntese global, UI, autenticação para acesso externo ou E2E com vídeo. `revision` faz hash dos materiais conhecidos; mudanças semânticas fora do hash exigem alteração explícita de contrato. T-005 permanece parcial; T-007/T-010 também. T-004 mantém fonte editorial do protocolo pendente. Nenhum merge/deploy automático.
+A listagem devolve metadados seguros do job, proveniência e:
+
+```json
+{
+  "artifacts": {
+    "sections_present": true,
+    "synthesis_present": false
+  }
+}
+```
+
+Esses campos significam **presença física**, não integridade validada. Abrir seções/síntese usa os endpoints específicos, que revalidam checkpoints. A listagem não devolve texto da transcrição, não abre artefatos e não chama IA.
+
+Paginação retorna `next_before`; quando `null`, não há página seguinte naquele snapshot lógico.
+
+## Worker e recovery
+
+Existe um único executor local por banco, protegido por `flock`. Não há lease multiworker nem suporte a `uvicorn --workers N`.
+
+Ao iniciar, jobs `RUNNING` antigos viram `INTERRUPTED/REMOTE_OUTCOME_UNKNOWN`, sem retransmissão automática. Jobs enfileirados só executam quando provider/model/revision/orçamento coincidem com a instância. Retomada manual exige configuração idêntica para análise por seção.
+
+Nenhuma transação SQLite permanece aberta durante chamadas de IA. Resultado remoto desconhecido nunca vira sucesso presumido.
+
+Síntese histórica é diferente de nova inferência: o GET usa provider/model/revision gravados com o checkpoint e continua legível após restart sem provider de síntese; o POST continua exigindo provider atual explicitamente configurado.
+
+## Evidência
+
+A primeira revisão desta fatia, `7d090ddd5e7a24689ad188191e514d5a864d2932`, compilou mas o CI falhou por um `json` ausente **no fixture de migração do teste**, antes de exercitar o cenário. O teste foi corrigido sem mudança de contrato.
+
+SHA validado: `c65353714f1204a164407a0130c9521ca91ceddc`. GitHub Actions **36257023821**: PASS Python 3.12 e 3.13; **240 testes PASS**. A suíte é offline e não usa credenciais/provedores externos.
+
+## Limites
+
+T-005 continua parcial. Não há ainda entidade completa de biblioteca/vídeo, busca textual, frontend, aquisição YouTube/áudio, STT E2E, autenticação para serviço público ou multiworker. A listagem de jobs é uma boundary para T-008, não uma implementação de T-008.
+
+Nenhuma chamada Groq autenticada, merge ou deploy foi realizada nesta fatia.
