@@ -36,6 +36,12 @@ class SmokeVerification:
     positional_coverage: PositionalCoverage
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisVerification:
+    idea_count: int
+    positional_coverage: PositionalCoverage
+
+
 def _read_json_file(path: Path, code: str) -> object:
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 512_000:
@@ -79,7 +85,8 @@ def call(base: str, method: str, route: str, body: dict | None = None) -> dict:
     opener = build_opener(ProxyHandler({}))
     try:
         with opener.open(request, timeout=8.0) as response:
-            if response.status not in ({"GET": (200,), "POST": (202,)}[method]):
+            expected = {"GET": (200,), "POST": (200, 202)}.get(method)
+            if expected is None or response.status not in expected:
                 raise SmokeFailure("UNEXPECTED_HTTP_STATUS")
             content = response.read(MAX_RESPONSE + 1)
     except HTTPError as exc:
@@ -156,6 +163,72 @@ def verify_sections(result: dict, transcript: Transcript, job_id: str, planned: 
     return SmokeVerification(len(sections), coverage)
 
 
+
+def verify_global_synthesis(
+    result: dict, transcript: Transcript, job_id: str, provider: str, model: str,
+    expect_evidence: bool = False,
+) -> SynthesisVerification:
+    """Validate the separate global result without trusting server-side claims."""
+    verify_provenance(result, expect_evidence)
+    analysis = result.get("analysis")
+    coverage_payload = result.get("coverage")
+    if (result.get("job_id") != job_id
+            or result.get("result_kind") != "GLOBAL_SYNTHESIS"
+            or not isinstance(analysis, dict)
+            or not isinstance(analysis.get("summary"), str)
+            or not analysis["summary"].strip()
+            or not isinstance(analysis.get("ideas"), list)
+            or analysis.get("provider") != provider
+            or analysis.get("model") != model
+            or not isinstance(coverage_payload, dict)):
+        raise SmokeFailure("INVALID_GLOBAL_SYNTHESIS")
+
+    transcript_ids = tuple(segment.id for segment in transcript.segments)
+    allowed = set(transcript_ids)
+    references: list[str] = []
+    for idea in analysis["ideas"]:
+        if (not isinstance(idea, dict)
+                or not isinstance(idea.get("title"), str)
+                or not idea["title"].strip()
+                or not isinstance(idea.get("explanation"), str)
+                or not idea["explanation"].strip()
+                or not isinstance(idea.get("source_segment_ids"), list)
+                or not idea["source_segment_ids"]
+                or any(not isinstance(ref, str) or ref not in allowed
+                       for ref in idea["source_segment_ids"])
+                or len(set(idea["source_segment_ids"])) != len(idea["source_segment_ids"])):
+            raise SmokeFailure("INVALID_GLOBAL_SYNTHESIS_EVIDENCE")
+        references.extend(idea["source_segment_ids"])
+
+    try:
+        expected_coverage = assess_reference_positions(
+            transcript, (transcript_ids,), references,
+        )
+    except CoverageValidationError as exc:
+        raise SmokeFailure(f"INVALID_GLOBAL_SYNTHESIS_EVIDENCE_{exc.code}") from None
+    if coverage_payload != asdict(expected_coverage):
+        raise SmokeFailure("INVALID_GLOBAL_SYNTHESIS_COVERAGE")
+    return SynthesisVerification(len(analysis["ideas"]), expected_coverage)
+
+
+def execute_synthesis(
+    *, port: int, job_id: str, transcript: Transcript, provider: str,
+    expect_evidence: bool = False, request=call,
+) -> SynthesisVerification:
+    """Run exactly one explicit synthesis request after verifying local configuration."""
+    base = f"http://127.0.0.1:{port}"
+    configuration = request(base, "GET", "/api/config")
+    if (configuration.get("synthesis_provider") != provider
+            or not isinstance(configuration.get("synthesis_model"), str)
+            or not configuration["synthesis_model"].strip()):
+        raise SmokeFailure("SYNTHESIS_PROVIDER_CONFIGURATION_MISMATCH")
+    result = request(base, "POST", f"/api/jobs/{job_id}/synthesis")
+    return verify_global_synthesis(
+        result, transcript, job_id, provider, configuration["synthesis_model"],
+        expect_evidence,
+    )
+
+
 def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
             max_wait_seconds: int, request=call, pause=time.sleep) -> tuple[str, SmokeVerification]:
     base = f"http://127.0.0.1:{port}"
@@ -197,14 +270,24 @@ def execute(*, port: int, provider: str, payload: dict, transcript: Transcript,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Local, explicit analysis smoke test")
+    parser = argparse.ArgumentParser(description="Local smoke test with separate AI-operation consent")
     parser.add_argument("--transcript", type=Path, required=True)
     parser.add_argument("--evidence", type=Path,
                         help="Optional local caption-evidence sidecar; validated before any HTTP")
-    parser.add_argument("--submit", action="store_true", help="Allow ONE job submission to selected provider")
-    parser.add_argument("--confirm-provider-upload", action="store_true",
-                        help="Acknowledge the transcript may leave your computer and consume quota")
-    parser.add_argument("--expect-provider", help="Provider configured on the local server")
+    parser.add_argument("--submit-analysis", "--submit", dest="submit_analysis", action="store_true",
+                        help="Allow ONE section-analysis job submission")
+    parser.add_argument("--confirm-analysis-upload", "--confirm-provider-upload",
+                        dest="confirm_analysis_upload", action="store_true",
+                        help="Acknowledge section analysis may send transcript data and consume quota")
+    parser.add_argument("--expect-analysis-provider", "--expect-provider",
+                        dest="expect_analysis_provider",
+                        help="Section-analysis provider configured on the local server")
+    parser.add_argument("--synthesize-global", action="store_true",
+                        help="After sections complete, allow ONE explicit global-synthesis POST")
+    parser.add_argument("--confirm-synthesis-upload", action="store_true",
+                        help="Separately acknowledge synthesis may send data and consume additional quota")
+    parser.add_argument("--expect-synthesis-provider",
+                        help="Global-synthesis provider configured on the local server")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-wait-seconds", type=int, default=180)
     args = parser.parse_args(argv)
@@ -214,27 +297,61 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Pré-validação local: {len(transcript.segments)} segmentos; nenhum texto exibido.")
         if has_evidence:
             print("Manifesto de proveniência validado localmente; vídeo/sincronização continuam NÃO verificados.")
-        if not args.submit:
-            if args.confirm_provider_upload or args.expect_provider:
-                raise SmokeFailure("SUBMISSION_FLAG_REQUIRED")
+
+        synthesis_options_used = bool(
+            args.synthesize_global or args.confirm_synthesis_upload
+            or args.expect_synthesis_provider
+        )
+        if not args.submit_analysis:
+            if (args.confirm_analysis_upload or args.expect_analysis_provider
+                    or synthesis_options_used):
+                raise SmokeFailure("ANALYSIS_SUBMISSION_FLAG_REQUIRED")
             print("Somente validação local; nenhuma requisição HTTP ou IA.")
             return 0
-        if (not args.confirm_provider_upload or not args.expect_provider
-                or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", args.expect_provider)
+
+        if (not args.confirm_analysis_upload or not args.expect_analysis_provider
+                or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", args.expect_analysis_provider)
                 or not 1 <= args.port <= 65535
                 or not 1 <= args.max_wait_seconds <= 3600):
-            raise SmokeFailure("INVALID_EXPLICIT_SUBMISSION_OPTIONS")
-        job_id, verification = execute(port=args.port, provider=args.expect_provider,
-                                       payload=payload, transcript=transcript,
-                                       max_wait_seconds=args.max_wait_seconds)
-        print(f"Concluído: {verification.section_count} seção(ões) com cobertura estrutural dos segmentos; job {job_id}.")
+            raise SmokeFailure("INVALID_EXPLICIT_ANALYSIS_OPTIONS")
+
+        if args.synthesize_global:
+            if (not args.confirm_synthesis_upload or not args.expect_synthesis_provider
+                    or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}",
+                                        args.expect_synthesis_provider)):
+                raise SmokeFailure("INVALID_EXPLICIT_SYNTHESIS_OPTIONS")
+        elif args.confirm_synthesis_upload or args.expect_synthesis_provider:
+            raise SmokeFailure("SYNTHESIS_FLAG_REQUIRED")
+
+        job_id, verification = execute(
+            port=args.port, provider=args.expect_analysis_provider,
+            payload=payload, transcript=transcript,
+            max_wait_seconds=args.max_wait_seconds,
+        )
+        print(f"Análise por seções concluída: {verification.section_count} seção(ões); job {job_id}.")
         coverage = verification.positional_coverage
-        print("Cobertura posicional das referências: "
+        print("Cobertura posicional das referências das seções: "
               f"início={'sim' if coverage.beginning_referenced else 'não'}, "
               f"meio={'sim' if coverage.middle_referenced else 'não'}, "
               f"fim={'sim' if coverage.end_referenced else 'não'}; "
               f"{coverage.referenced_segments}/{coverage.total_segments} segmentos referenciados.")
-        print("Resultado SECTIONS_ONLY; cobertura posicional não é síntese global, prova semântica, factualidade ou deep link.")
+        print("Resultado SECTIONS_ONLY; isso não é síntese global, prova semântica, factualidade ou deep link.")
+
+        if args.synthesize_global:
+            print("Síntese global autorizada separadamente: esta é uma SEGUNDA operação e pode consumir cota adicional.")
+            synthesis = execute_synthesis(
+                port=args.port, job_id=job_id, transcript=transcript,
+                provider=args.expect_synthesis_provider, expect_evidence=has_evidence,
+            )
+            global_coverage = synthesis.positional_coverage
+            print(
+                "GLOBAL_SYNTHESIS concluída: "
+                f"{synthesis.idea_count} ideia(s); cobertura das referências "
+                f"início={'sim' if global_coverage.beginning_referenced else 'não'}, "
+                f"meio={'sim' if global_coverage.middle_referenced else 'não'}, "
+                f"fim={'sim' if global_coverage.end_referenced else 'não'}."
+            )
+            print("Síntese global continua sendo descrição do conteúdo, não verificação factual ou autorização de deep link.")
         return 0
     except SmokeFailure as exc:
         print(f"Smoke test: {exc}", file=sys.stderr)
