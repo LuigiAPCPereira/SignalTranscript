@@ -76,10 +76,21 @@ Nenhum dos dois caminhos comprova factualidade ou habilita deep links.
 
 O smoke nunca reenvia automaticamente análise ou síntese. Se houver timeout do POST de análise antes de receber job ID, o resultado é desconhecido. Se a síntese já tiver sido enviada e a resposta HTTP for perdida, também não deve ser repetida cegamente.
 
-Hoje existe checkpoint de síntese no backend, mas ainda não existe um GET dedicado para consultar o resultado global sem novo POST. Essa lacuna permanece explícita e é uma boa próxima fatia de T-005/T-007.
+Existe agora `GET /api/jobs/{id}/synthesis`, estritamente read-only: ele só devolve checkpoint global já persistido, valida a configuração e não chama o provedor. Quando não há resultado, responde `SYNTHESIS_NOT_FOUND`; a leitura não cria a tabela `global_syntheses`.
+
+Após timeout ou dúvida, consulte primeiro:
+
+```bash
+python -m signaltranscript.backend.smoke \
+  --transcript examples/synthetic_transcript.json \
+  --check-synthesis-job JOB_ID \
+  --expect-synthesis-provider groq
+```
+
+Esse modo usa somente `GET /api/config` + `GET /api/jobs/{id}/synthesis`, não pede consentimento de upload e não dispara inferência. Se nenhum checkpoint existir, decidir uma nova tentativa continua sendo ação humana explícita; o cliente não converte 404 em retry.
 
 ## Evidência
 
-SHA `93168c1d6a5038d6e5f70775500f6db5a9b80581`, GitHub Actions **36253734809**: PASS Python 3.12 e 3.13; **232 testes PASS** em ambos os logs. Os testes novos comprovam consentimento separado, preflight antes de HTTP, recusa de provedor de síntese divergente, recomputação de cobertura e fluxo HTTP completo com analysis/synthesis fakes separados.
+SHA `e6c159777f12c8f51a9ee085c07e5e1b062ba8a6`, GitHub Actions **36255131808**: PASS Python 3.12 e 3.13; **234 testes PASS**. A primeira revisão do GET (`488e31df`) falhou apenas no teste CLI por captura prematura do transport; a injeção foi corrigida e revalidada. Os testes novos comprovam consentimento separado, preflight antes de HTTP, recusa de provedor de síntese divergente, recomputação de cobertura e fluxo HTTP completo com analysis/synthesis fakes separados.
 
 A suíte não instala credencial nem faz requisição externa. Groq real, cotas e qualidade permanecem não validadas. PR segue Draft; sem merge/deploy automático; adoção do protocolo continua parcial.
