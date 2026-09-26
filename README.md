@@ -2,7 +2,7 @@
 
 Ferramenta **generalista** para transformar vídeos em conhecimento consultável sem exigir assistir a cada vídeo. Uma fonte válida (URL do YouTube quando acessível e permitida, transcrição importada ou áudio autorizado) deverá originar transcrição, síntese estruturada, referências à origem e biblioteca pessoal.
 
-**Estado real:** MVP v0.1 em implementação parcial, apenas nas branches dos PRs em *draft*. O backend já possui uma fatia HTTP/SQLite para analisar **transcrições importadas por seções** com testes offline e provedor simulado. O PR #8 acrescenta composição de Groq opt-in e executável local; **Groq autenticada, vídeo real, aquisição, síntese global, interface, E2E, merge e deploy não foram validados**. A `main` não incorpora essas funcionalidades. Um resumo representa o que a fonte diz, sem verificação independente dos fatos.
+**Estado real:** MVP v0.1 em implementação parcial na pilha de PRs *draft*. A branch do PR #10 já contém FastAPI/SQLite, jobs recuperáveis, análise longa por seções, síntese global explícita/checkpointada, adaptadores Groq STT/análise/síntese validados offline, importação SRT/WebVTT com proveniência e smoke com consentimento separado. **Groq autenticada, aquisição de vídeo/áudio real, frontend, E2E, merge e deploy não foram validados.** A `main` ainda não incorpora essas funcionalidades. Um resumo representa o que a fonte diz, sem verificação independente dos fatos.
 
 ## Decisões e propostas
 
@@ -16,4 +16,4 @@ Ferramenta **generalista** para transformar vídeos em conhecimento consultável
 - [Instruções dos agentes](AGENTS.md) · [Decisões](docs/adr/ADR-001-python-fastapi.md) · [Histórico](SESSION_LOG.md) · [Cobertura documental](docs/ADOPTION_REPORT.md).
 - [API local](docs/T005_LOCAL_JOB_API.md) · [Composição e instruções de execução opt-in](docs/T005_LOCAL_RUNTIME.md). Esses documentos descrevem a branch proposta, **não a `main`**.
 
-O Agent Development Protocol v2.2 disponível no Project é um snapshot; seu índice de distribuição no Notion permanece **STAGING** na consulta desta etapa, sem equivalência integral certificada. A adoção é PARCIAL; não presumir acesso ao Project em Codex ou tarefas agendadas.
+**Agent Development Protocol:** adoção v2.2 do SignalTranscript está **CONCLUÍDA na ref de trabalho** pelo Adoption Gate documentado em [docs/ADOPTION_REPORT.md](docs/ADOPTION_REPORT.md), com fonte/hash registrados em [docs/PROTOCOL_SOURCE.md](docs/PROTOCOL_SOURCE.md). A distribuição central Notion continua **STAGING** e a `main` não está integrada; esses estados são separados. Não presumir acesso aos arquivos do Project em Codex ou tarefas agendadas.
