@@ -66,3 +66,12 @@ Também permanecem pendentes provedor local/NIM real, política explícita para 
 - `1d78f93a52fbef6817374fd10ac7692d0901bcd5`: Actions **36245879695** PASS Python 3.12/3.13, **227 testes PASS** no log 3.13 — adaptador Groq de síntese, política de evidência e composição independente.
 
 T-007 continua parcial e a adoção do protocolo continua parcial. Nenhum merge, deploy ou chamada autenticada/paga é evidência desta fatia.
+
+
+## Recuperação read-only da síntese
+
+`GET /api/jobs/{job_id}/synthesis` reconstrói a identidade do checkpoint a partir do job, das seções completas e da configuração explícita de síntese. Ele usa `SQLiteGlobalSynthesisCheckpoint.load_existing()`, que consulta uma tabela existente sem DDL. Se nenhuma síntese foi persistida, retorna 404 e não cria `global_syntheses`; se existir, revalida fingerprint, provider/model/revision, referências e cobertura antes de responder.
+
+O smoke oferece `--check-synthesis-job JOB_ID --expect-synthesis-provider NOME`. Esse modo executa apenas GETs e serve para consultar o resultado após timeout antes de considerar outro POST. Nenhum retry automático foi introduzido.
+
+Evidência: SHA `e6c159777f12c8f51a9ee085c07e5e1b062ba8a6`, Actions 36255131808 PASS Python 3.12/3.13, 234 testes.
