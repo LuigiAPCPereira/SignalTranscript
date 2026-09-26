@@ -105,6 +105,35 @@ class SynthesisCheckpointTests(unittest.IsolatedAsyncioTestCase):
             self.checkpoint(transcript=changed).load()
         self.assertEqual(caught.exception.args[0], "RUN_CONFIGURATION_CHANGED")
 
+
+    async def test_historical_read_uses_stored_identity_not_current_configuration(self):
+        await synthesize_with_checkpoint(
+            self.checkpoint(), FakeProvider(global_analysis("s0", "s4", "s8")),
+        )
+        restored = SQLiteGlobalSynthesisCheckpoint.load_persisted(
+            self.path, run_id="run-1", transcript=source(), sectioned=sections(),
+        )
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.analysis.provider, "global-fake")
+        self.assertEqual(restored.analysis.model, "global-model")
+        self.assertTrue(restored.coverage.spans_all_positions)
+
+    async def test_historical_read_fails_closed_on_changed_source(self):
+        await synthesize_with_checkpoint(
+            self.checkpoint(), FakeProvider(global_analysis("s0", "s4", "s8")),
+        )
+        changed = source()
+        changed = Transcript(
+            changed.video_id, changed.source,
+            changed.segments[:-1] + (Segment("s8", "changed", 8000, 9000),),
+            language=changed.language,
+        )
+        with self.assertRaises(SynthesisCheckpointMismatch) as caught:
+            SQLiteGlobalSynthesisCheckpoint.load_persisted(
+                self.path, run_id="run-1", transcript=changed, sectioned=sections(),
+            )
+        self.assertEqual(caught.exception.args[0], "RUN_CONFIGURATION_CHANGED")
+
     async def test_corrupted_payload_is_rejected(self):
         await synthesize_with_checkpoint(
             self.checkpoint(), FakeProvider(global_analysis("s0", "s4", "s8")),

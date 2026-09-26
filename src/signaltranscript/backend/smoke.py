@@ -237,13 +237,18 @@ def read_synthesis(
     *, port: int, job_id: str, transcript: Transcript, provider: str,
     expect_evidence: bool = False, request=None,
 ) -> SynthesisVerification:
-    """Read an existing global checkpoint using GET only; never requests inference."""
+    """Read historical checkpoint using one GET; current synthesis config is irrelevant."""
     request = call if request is None else request
     base = f"http://127.0.0.1:{port}"
-    _, model = _synthesis_configuration(base, provider, request)
     result = request(base, "GET", f"/api/jobs/{job_id}/synthesis")
+    analysis = result.get("analysis")
+    if (not isinstance(analysis, dict)
+            or analysis.get("provider") != provider
+            or not isinstance(analysis.get("model"), str)
+            or not analysis["model"].strip()):
+        raise SmokeFailure("SYNTHESIS_PROVIDER_CONFIGURATION_MISMATCH")
     return verify_global_synthesis(
-        result, transcript, job_id, provider, model, expect_evidence,
+        result, transcript, job_id, provider, analysis["model"], expect_evidence,
     )
 
 

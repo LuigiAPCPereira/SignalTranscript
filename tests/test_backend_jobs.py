@@ -270,6 +270,28 @@ class APIIntegrationTests(unittest.TestCase):
             self.assertEqual(sections["result_kind"], "SECTIONS_ONLY")
             self.assertNotIn("summary", sections)
 
+
+    def test_historical_synthesis_remains_readable_after_restart_without_provider(self):
+        synthesis_provider = FakeSynthesisProvider()
+        with TestClient(self.app(FakeProvider(), synthesis=synthesis_provider)) as client:
+            job_id = client.post("/api/jobs", json=body()).json()["id"]
+            self.assertEqual(poll(client, job_id)["state"], "COMPLETED")
+            created = client.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(created.status_code, 200, created.text)
+            expected = created.json()
+        self.assertEqual(synthesis_provider.calls, 1)
+
+        with TestClient(self.app(FakeProvider())) as restarted:
+            restored = restarted.get(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(restored.status_code, 200, restored.text)
+            self.assertEqual(restored.json(), expected)
+            unavailable = restarted.post(f"/api/jobs/{job_id}/synthesis")
+            self.assertEqual(unavailable.status_code, 409)
+            self.assertEqual(
+                unavailable.json()["detail"], "SYNTHESIS_PROVIDER_NOT_CONFIGURED",
+            )
+        self.assertEqual(synthesis_provider.calls, 1)
+
     def test_global_synthesis_requires_explicit_configuration_and_complete_sections(self):
         with TestClient(self.app(FakeProvider())) as client:
             job_id = client.post("/api/jobs", json=body()).json()["id"]

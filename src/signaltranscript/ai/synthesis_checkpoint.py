@@ -142,7 +142,7 @@ class SQLiteGlobalSynthesisCheckpoint:
             conn.close()
 
     def load_existing(self) -> GlobalSynthesis | None:
-        """Read an already persisted result without DDL or provider calls."""
+        """Read a result for this exact configured identity without DDL/provider calls."""
         conn = sqlite3.connect(self.path, timeout=5)
         try:
             table = conn.execute(
@@ -151,6 +151,55 @@ class SQLiteGlobalSynthesisCheckpoint:
             if table is None:
                 return None
             return self._load_from(conn)
+        finally:
+            conn.close()
+
+    @classmethod
+    def load_persisted(
+        cls, path: Path, *, run_id: str, transcript: Transcript,
+        sectioned: SectionedAnalysis,
+    ) -> GlobalSynthesis | None:
+        """Read immutable historical synthesis using identity stored with the result.
+
+        This is intentionally independent of the provider currently configured for
+        NEW synthesis operations. It performs no DDL and never calls a provider.
+        """
+        if not isinstance(run_id, str) or not run_id.strip() or len(run_id) > 256:
+            raise ValueError("run_id must be nonempty and at most 256 characters")
+        if sectioned.video_id != transcript.video_id or not sectioned.complete:
+            raise SynthesisCheckpointMismatch("SECTIONS_NOT_SYNTHESIZABLE")
+        try:
+            assess_reference_positions(
+                transcript, tuple(section.segment_ids for section in sectioned.sections), (),
+            )
+        except ValueError as exc:
+            raise SynthesisCheckpointMismatch("SECTION_COVERAGE_MISMATCH") from exc
+
+        conn = sqlite3.connect(Path(path), timeout=5)
+        try:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_syntheses'"
+            ).fetchone()
+            if table is None:
+                return None
+            row = conn.execute(
+                """SELECT schema_version, fingerprint, provider, model, revision, payload
+                   FROM global_syntheses WHERE run_id=?""",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            expected_fingerprint = _fingerprint(transcript, sectioned)
+            if row[0] != SCHEMA_VERSION or row[1] != expected_fingerprint:
+                raise SynthesisCheckpointMismatch("RUN_CONFIGURATION_CHANGED")
+            try:
+                historical = cls(
+                    Path(path), run_id=run_id, transcript=transcript, sectioned=sectioned,
+                    provider=row[2], model=row[3], revision=row[4],
+                )
+            except (TypeError, ValueError) as exc:
+                raise SynthesisCheckpointMismatch("INVALID_SYNTHESIS_METADATA") from exc
+            return historical._validate(_restore_analysis(row[5]))
         finally:
             conn.close()
 

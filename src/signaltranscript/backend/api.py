@@ -261,9 +261,7 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 "provenance": provenance_view(job)}
 
 
-    def synthesis_checkpoint_for(job: Job) -> SQLiteGlobalSynthesisCheckpoint:
-        if synthesis_provider_name is None or synthesis_model is None or synthesis_revision is None:
-            raise HTTPException(status_code=409, detail="SYNTHESIS_PROVIDER_NOT_CONFIGURED")
+    def sectioned_for_synthesis(job: Job) -> SectionedAnalysis:
         if job.state != "COMPLETED":
             raise HTTPException(status_code=409, detail="SECTIONS_NOT_COMPLETE")
         try:
@@ -275,16 +273,24 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
             completed = section_checkpoint.open_and_load()
             if len(completed) != job.section_count:
                 raise CheckpointMismatch("INCOMPLETE_CHECKPOINT")
-            sectioned = SectionedAnalysis(
+            return SectionedAnalysis(
                 job.transcript.video_id, job.section_count, completed,
             )
+        except (CheckpointMismatch, SynthesisValidationError,
+                ChunkPlanningError, ValueError):
+            raise HTTPException(status_code=409, detail="INVALID_SYNTHESIS_CHECKPOINT") from None
+
+    def synthesis_checkpoint_for(job: Job) -> SQLiteGlobalSynthesisCheckpoint:
+        if synthesis_provider_name is None or synthesis_model is None or synthesis_revision is None:
+            raise HTTPException(status_code=409, detail="SYNTHESIS_PROVIDER_NOT_CONFIGURED")
+        sectioned = sectioned_for_synthesis(job)
+        try:
             return SQLiteGlobalSynthesisCheckpoint(
                 jobs.path, run_id=job.id, transcript=job.transcript,
                 sectioned=sectioned, provider=synthesis_provider_name,
                 model=synthesis_model, revision=synthesis_revision,
             )
-        except (CheckpointMismatch, SynthesisCheckpointMismatch,
-                SynthesisValidationError, ChunkPlanningError, ValueError):
+        except (SynthesisCheckpointMismatch, ValueError):
             raise HTTPException(status_code=409, detail="INVALID_SYNTHESIS_CHECKPOINT") from None
 
     def synthesis_view(job: Job, result) -> dict[str, object]:
@@ -298,14 +304,16 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
 
     @app.get("/api/jobs/{job_id}/synthesis")
     async def get_synthesis(job_id: str):
-        """Read only a previously persisted synthesis; never invokes a provider."""
+        """Read immutable persisted synthesis; current provider configuration is irrelevant."""
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
-        checkpoint = synthesis_checkpoint_for(job)
+        sectioned = sectioned_for_synthesis(job)
         try:
-            result = checkpoint.load_existing()
-        except SynthesisCheckpointMismatch:
+            result = SQLiteGlobalSynthesisCheckpoint.load_persisted(
+                jobs.path, run_id=job.id, transcript=job.transcript, sectioned=sectioned,
+            )
+        except (SynthesisCheckpointMismatch, ValueError):
             raise HTTPException(status_code=409, detail="INVALID_SYNTHESIS_CHECKPOINT") from None
         except Exception:
             raise HTTPException(status_code=500, detail="SYNTHESIS_INTERNAL_ERROR") from None
