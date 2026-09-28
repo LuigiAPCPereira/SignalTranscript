@@ -82,6 +82,7 @@ def list_view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
         "error_code": job.error_code,
         "provenance": provenance_view(job),
         "artifacts": {
+            "transcript_present": True,
             "sections_present": sections_present,
             "synthesis_present": synthesis_present,
         },
@@ -245,6 +246,19 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
         if job is None:
             raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
         return view(jobs, job)
+
+    @app.get("/api/jobs/{job_id}/transcript")
+    async def transcript(job_id: str):
+        """Return the canonical persisted transcript; never starts provider work."""
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+        return {
+            "job_id": job.id,
+            "result_kind": "TRANSCRIPT",
+            "transcript": asdict(job.transcript),
+            "provenance": provenance_view(job),
+        }
 
     @app.post("/api/jobs/{job_id}/resume", status_code=202)
     async def resume(job_id: str):

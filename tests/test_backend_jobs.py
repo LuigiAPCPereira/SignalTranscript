@@ -249,6 +249,43 @@ class APIIntegrationTests(unittest.TestCase):
         self.assertEqual(fake.calls, [("s1",), ("s2",)])
 
 
+
+    def test_transcript_read_is_immediate_exact_and_never_enables_links_or_ai(self):
+        fake = FakeProvider()
+        payload = body_with_evidence()
+        with TestClient(self.app(fake)) as client:
+            created = client.post("/api/jobs", json=payload)
+            self.assertEqual(created.status_code, 202, created.text)
+            job_id = created.json()["id"]
+
+            result = client.get(f"/api/jobs/{job_id}/transcript")
+            self.assertEqual(result.status_code, 200, result.text)
+            transcript_payload = result.json()
+            self.assertEqual(transcript_payload["job_id"], job_id)
+            self.assertEqual(transcript_payload["result_kind"], "TRANSCRIPT")
+            self.assertEqual(
+                transcript_payload["transcript"],
+                {
+                    "video_id": payload["video_id"],
+                    "source": payload["source"],
+                    "segments": payload["segments"],
+                    "language": payload["language"],
+                    "provider": None,
+                    "model": None,
+                },
+            )
+            self.assertTrue(transcript_payload["provenance"]["evidence_present"])
+            self.assertFalse(transcript_payload["provenance"]["deep_links_allowed"])
+
+            listed = client.get("/api/jobs").json()["items"][0]
+            self.assertTrue(listed["artifacts"]["transcript_present"])
+
+            before_calls = len(fake.calls)
+            again = client.get(f"/api/jobs/{job_id}/transcript")
+            self.assertEqual(again.json(), transcript_payload)
+            self.assertEqual(len(fake.calls), before_calls)
+            self.assertEqual(client.get("/api/jobs/missing/transcript").status_code, 404)
+
     def test_job_listing_is_paginated_read_only_and_reports_artifact_presence(self):
         fake = FakeProvider()
         synthesis = FakeSynthesisProvider()
