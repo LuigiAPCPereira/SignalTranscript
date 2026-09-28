@@ -24,6 +24,7 @@ Operações atuais:
 - `POST /api/jobs` — registra **transcrição importada**, não URL/áudio;
 - `GET /api/jobs?limit=20&before=N` — lista journal newest-first, `limit` 1–50;
 - `GET /api/jobs/{id}` — estado/progresso;
+- `GET /api/jobs/{id}/transcript` — Transcript canônico persistido + proveniência, sem iniciar IA;
 - `GET /api/jobs/{id}/sections` — resultado por seções;
 - `POST /api/jobs/{id}/resume` — retomada explícita;
 - `POST /api/jobs/{id}/cancel` — cancelamento conservador; não declara cancelamento remoto de trabalho `RUNNING`;
@@ -41,7 +42,9 @@ A listagem devolve metadados seguros do job, proveniência e:
 }
 ```
 
-Esses campos significam **presença física**, não integridade validada. Abrir seções/síntese usa os endpoints específicos, que revalidam checkpoints. A listagem não devolve texto da transcrição, não abre artefatos e não chama IA.
+Esses campos significam **presença física**, não integridade validada. `transcript_present` é sempre verdadeiro para um job válido nesta fase porque o job nasce de uma transcrição importada; seções/síntese dependem de artefatos adicionais. Abrir seções/síntese usa endpoints que revalidam checkpoints. A listagem não devolve texto da transcrição, não abre artefatos e não chama IA.
+
+`GET /api/jobs/{id}/transcript` devolve `result_kind=TRANSCRIPT`, o objeto canônico persistido (`video_id/source/segments/language/provider/model`) e `provenance`. Ele não cria versões novas, não chama provider e não transforma timestamps existentes em deep links: `deep_links_allowed` continua vindo do contrato de proveniência.
 
 Paginação retorna `next_before`; quando `null`, não há página seguinte naquele snapshot lógico.
 
@@ -59,7 +62,7 @@ Síntese histórica é diferente de nova inferência: o GET usa provider/model/r
 
 A primeira revisão desta fatia, `7d090ddd5e7a24689ad188191e514d5a864d2932`, compilou mas o CI falhou por um `json` ausente **no fixture de migração do teste**, antes de exercitar o cenário. O teste foi corrigido sem mudança de contrato.
 
-SHA validado: `c65353714f1204a164407a0130c9521ca91ceddc`. GitHub Actions **36257023821**: PASS Python 3.12 e 3.13; **240 testes PASS**. A suíte é offline e não usa credenciais/provedores externos.
+Checkpoint da listagem/schema v3: `c65353714f1204a164407a0130c9521ca91ceddc`, Actions 36257023821, 240 testes. Transcript read-only: SHA `5b3bb0958a654ff83168bf85c4c8f814141c3bdc`, GitHub Actions **36432546089**: PASS Python 3.12 e 3.13; **241 testes PASS**. A suíte é offline e não usa credenciais/provedores externos.
 
 ## Limites
 
