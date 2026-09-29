@@ -54,3 +54,11 @@
 - Commit inicial `ee2b7a22b458e85b15b53c2f382b32f60c52a91f` passou Actions 36581307388 em Python 3.12/3.13 com 248 testes.
 - Render em Chromium com bytes da revisão e fixtures de fetch encontrou defeito real: regra `.reader-empty {display:grid}` sobrepunha o atributo `hidden`. O guardrail `[hidden]{display:none!important}` e teste foram instalados; `682c08427191117cc2528530c5f4626f3bf5e7d8` passou Actions 36582197169 com 248 testes.
 - Render corrigido: desktop 1440×1000 (biblioteca, transcript, busca truncada) e mobile 390×844 (transcript), sem overflow horizontal. O Chromium do ambiente bloqueou localhost por política administrativa; portanto o render validou os assets/estados com fixtures, não E2E browser→FastAPI.
+
+
+## 2026-09-29 — T-008 leitor de seções e síntese persistidas
+
+- O primeiro frontend foi expandido sem adicionar endpoints de escrita: abas Transcrição, Seções e Síntese global usam apenas GET. O cliente exige `SECTIONS_ONLY` e `GLOBAL_SYNTHESIS` explicitamente e não contém `POST`.
+- Seções mostram resumos locais, ideias e referências, com aviso de que não são síntese global. A síntese mostra resumo global, ideias e cobertura de evidências, com aviso de que não é verificação factual independente. Síntese ausente (404) é estado normal e não dispara geração.
+- Commit funcional `a8225c6a393a24a4c96fd09ad1a6cfa8bc27b8c9` passou Actions 36609696964 em Python 3.12/3.13 com 248 testes.
+- Render representativo com CSS exato da revisão: seções desktop 1440×1000, síntese desktop 1440×1000 e síntese mobile 390×844; sem overflow horizontal. A política administrativa do Chromium bloqueia navegação local, então o render valida estrutura/CSS, não E2E browser→FastAPI.
