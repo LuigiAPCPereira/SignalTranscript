@@ -1,6 +1,6 @@
 # T-008 — Biblioteca local e busca textual
 
-**Estado:** **PARCIAL** na branch do PR #10. Esta primeira fatia implementa somente o read model backend necessário para uma futura UI; não existe frontend, FTS ou deep link validado. [TASKLIST](../TASKLIST.md) · [DESIGN](../DESIGN.md) · [Checkpoint](../PROJECT_STATE.md).
+**Estado:** **PARCIAL** na branch do PR #10. O read model abaixo agora possui um primeiro consumidor visual em [T008_FRONTEND](T008_FRONTEND.md). FTS, deep links e experiência completa continuam pendentes. [TASKLIST](../TASKLIST.md) · [DESIGN](../DESIGN.md) · [Checkpoint](../PROJECT_STATE.md).
 
 ## Ownership
 
