@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SignalTranscript — Biblioteca local</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Pular para o conteúdo</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">ST</span><span>SignalTranscript</span></div>
+    <span class="local-label">Biblioteca local</span>
+  </header>
+  <main id="main" class="workspace">
+    <section class="library-pane" aria-labelledby="library-title">
+      <header class="pane-heading">
+        <p class="eyebrow">Conhecimento salvo</p>
+        <h1 id="library-title">Biblioteca</h1>
+        <p class="lede">Encontre uma transcrição e leia o conteúdo persistido neste dispositivo.</p>
+      </header>
+      <form id="search-form" class="search-form" role="search">
+        <label for="search-input">Buscar nas transcrições atuais</label>
+        <div class="search-row">
+          <input id="search-input" name="q" type="search" minlength="2" maxlength="200" autocomplete="off" placeholder="Busque uma palavra ou trecho">
+          <button class="primary-button" type="submit">Buscar</button>
+          <button id="clear-search" class="quiet-button" type="button" hidden>Limpar</button>
+        </div>
+      </form>
+      <div id="library-status" class="status-line" role="status" aria-live="polite"></div>
+      <ul id="library-list" class="library-list" aria-label="Itens da biblioteca"></ul>
+      <div class="list-footer"><button id="load-more" class="quiet-button" type="button" hidden>Carregar mais</button></div>
+    </section>
+    <section class="reader-pane" aria-labelledby="reader-title">
+      <div id="reader-empty" class="reader-empty">
+        <p class="eyebrow">Leitor</p>
+        <h2 id="reader-title">Selecione uma transcrição</h2>
+        <p>Escolha um item da biblioteca ou um resultado da busca. Nenhum conteúdo é enviado para IA ao abrir esta tela.</p>
+      </div>
+      <article id="reader-content" class="reader-content" hidden>
+        <header class="reader-header">
+          <div><p class="eyebrow">Transcrição persistida</p><h2 id="reader-video-id"></h2></div>
+          <div id="reader-meta" class="reader-meta" aria-label="Metadados da transcrição"></div>
+        </header>
+        <p id="reader-provenance" class="provenance-note"></p>
+        <div id="reader-status" class="status-line" role="status" aria-live="polite"></div>
+        <ol id="reader-segments" class="segments" aria-label="Segmentos da transcrição"></ol>
+      </article>
+    </section>
+  </main>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>

@@ -15,3 +15,7 @@ groq = ["groq>=1.7,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+
+[tool.setuptools.package-data]
+signaltranscript = ["backend/web/*.html", "backend/web/*.css", "backend/web/*.js"]

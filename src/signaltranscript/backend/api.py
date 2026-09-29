@@ -12,6 +12,7 @@ import fcntl
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from signaltranscript.ai.errors import ProviderFailure
@@ -31,6 +32,9 @@ from signaltranscript.backend.caption_evidence import (
 from signaltranscript.backend.caption_import import MAX_BYTES
 from signaltranscript.backend.jobs import Job, JobConflict, SQLiteJobs, safe_code
 from signaltranscript.backend.library import LibraryEntry, LibraryReadModel, TranscriptSearchHit
+
+
+WEB_DIR = Path(__file__).with_name("web")
 
 
 class SegmentInput(BaseModel):
@@ -231,6 +235,27 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
                 await on_synthesis_provider_shutdown()
 
     app = FastAPI(title="SignalTranscript local analysis", lifespan=lifespan)
+
+    @app.get("/", include_in_schema=False)
+    async def frontend_index():
+        return FileResponse(
+            WEB_DIR / "index.html", media_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/assets/app.css", include_in_schema=False)
+    async def frontend_css():
+        return FileResponse(
+            WEB_DIR / "app.css", media_type="text/css",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/assets/app.js", include_in_schema=False)
+    async def frontend_js():
+        return FileResponse(
+            WEB_DIR / "app.js", media_type="text/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/api/jobs", status_code=202)
     async def submit(payload: ImportInput):
