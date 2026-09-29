@@ -1,11 +1,11 @@
 # DESIGN — SignalTranscript v0.1
 
-**Estado:** arquitetura v0.1 parcialmente implementada na pilha de PRs draft. **Implementado offline:** Python/FastAPI, SQLite/jobs/checkpoints, worker local, portas independentes, adaptadores Groq STT/análise/síntese, análise por seções e síntese global explícita. **Ainda proposto/pendente:** React/TypeScript, aquisição yt-dlp/FFmpeg condicionada a autorização, biblioteca/UI completas. [Requisitos](PRD.md) · [Tarefas](TASKLIST.md) · [ADR backend](docs/adr/ADR-001-python-fastapi.md) · [independência](docs/adr/ADR-002-provider-independence.md).
+**Estado:** arquitetura v0.1 parcialmente implementada na pilha de PRs draft. **Implementado offline:** Python/FastAPI, SQLite/jobs/checkpoints, worker local, portas independentes, adaptadores Groq STT/análise/síntese, biblioteca/search derivados e um frontend local read-only em HTML/CSS/ES modules. **Ainda pendente:** aquisição yt-dlp/FFmpeg condicionada a autorização, experiência completa de análise, deep links e E2E. React/TypeScript permanece opção futura, não stack adotado. [Requisitos](PRD.md) · [Tarefas](TASKLIST.md) · [ADR backend](docs/adr/ADR-001-python-fastapi.md) · [independência](docs/adr/ADR-002-provider-independence.md).
 
 ## Topologia e fronteiras
 
 ```text
-React/TypeScript [pendente] --HTTP localhost--> FastAPI [implementado em branch]
+Web UI nativa [tracer implementado] --same-origin--> FastAPI [implementado em branch]
                                                    |
                                       jobs/worker/checkpoints
                             ___________|____________|____________
@@ -64,7 +64,7 @@ SQLite já é usado na branch para jobs, checkpoints de seções/síntese e meca
 
 **API de jobs implementada na branch:** `POST /api/jobs`, `GET /api/jobs` paginado, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/transcript`, `GET /api/jobs/{id}/sections`, `POST /api/jobs/{id}/resume`, `POST /api/jobs/{id}/cancel`, `POST /api/jobs/{id}/synthesis` e `GET /api/jobs/{id}/synthesis`. A listagem expõe metadados/proveniência e presença de artefatos, nunca inicia IA.
 
-**Read model de biblioteca implementado na branch:** `GET /api/library` deriva uma entrada por `video_id` a partir do journal, mantendo `latest_job_id` e `version_count`; `GET /api/library/search` procura substring case-insensitive somente no transcript da versão mais recente. O journal continua sendo source of truth — não há tabela duplicada de biblioteca. A leitura de transcript por job permanece o artefato canônico. FTS/indexação, UI e análise por vídeo como experiência de biblioteca continuam pendentes. Entrada binária precisa de contrato multipart separado. A futura UI deve usar polling moderado e não interpretar presença de artefato como validação de integridade.
+**Read model de biblioteca implementado na branch:** `GET /api/library` deriva uma entrada por `video_id` a partir do journal, mantendo `latest_job_id` e `version_count`; `GET /api/library/search` procura substring case-insensitive somente no transcript da versão mais recente. O journal continua sendo source of truth — não há tabela duplicada de biblioteca. A leitura de transcript por job permanece o artefato canônico. FTS/indexação e experiência completa de análise continuam pendentes. O primeiro frontend biblioteca→busca→transcript já é servido pelo FastAPI na mesma origem, sem dependências externas; a decisão de framework foi deliberadamente adiada. Entrada binária precisa de contrato multipart separado. A futura UI deve usar polling moderado e não interpretar presença de artefato como validação de integridade.
 
 ## Segurança e testes exigidos
 
