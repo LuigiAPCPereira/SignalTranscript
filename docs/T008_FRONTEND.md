@@ -82,6 +82,32 @@ Após a correção, o estado vazio desaparece corretamente quando o leitor abre,
 
 **Limitação do render:** a política administrativa do Chromium deste ambiente bloqueou navegação para `127.0.0.1` com `ERR_BLOCKED_BY_ADMINISTRATOR`. Portanto, a renderização usou exatamente os mesmos bytes de HTML/CSS/JS, mas substituiu `fetch` por fixtures locais no harness. Isso valida layout/estados/interação dos assets, **não** constitui E2E browser→FastAPI. O contrato HTTP same-origin é coberto separadamente pelos testes FastAPI.
 
+## Leitura de conhecimento persistido
+
+O leitor agora possui três modos explícitos:
+
+- **Transcrição** — artefato canônico persistido;
+- **Seções** — `GET /api/jobs/{id}/sections`, exigindo `result_kind=SECTIONS_ONLY`;
+- **Síntese global** — `GET /api/jobs/{id}/synthesis`, exigindo `result_kind=GLOBAL_SYNTHESIS`.
+
+A UI não faz POST. Se não houver síntese global, 404 é tratado como estado normal: “Não há síntese global persistida para este item.” Seções parciais exibem a contagem existente versus `planned_sections` e nunca são apresentadas como síntese global.
+
+Seções mostram resumo local, ideias e IDs de evidência/segmentos. Síntese global mostra resumo, ideias e cobertura de evidências. A cópia da síntese avisa explicitamente que resumir a transcrição não constitui verificação independente dos fatos.
+
+Commit funcional: `a8225c6a393a24a4c96fd09ad1a6cfa8bc27b8c9`. GitHub Actions **36609696964** passou Python 3.12/3.13 com **248 testes**. O contrato frontend também verifica presença de `SECTIONS_ONLY`/`GLOBAL_SYNTHESIS` e ausência de strings `POST` no módulo cliente.
+
+### Render desta fatia
+
+Estados representativos foram renderizados com o CSS exato da revisão e DOM equivalente ao produzido pelo módulo:
+
+- Seções — desktop 1440×1000;
+- Síntese global — desktop 1440×1000;
+- Síntese global — mobile 390×844.
+
+Nos três casos não houve overflow horizontal; no mobile `scrollWidth === clientWidth === 390`. A hierarquia entre “Seções” e “Síntese global” permaneceu visualmente inequívoca.
+
+**Limitação:** como o Chromium deste ambiente bloqueia navegação local por política administrativa, estes renders não são E2E nem executam o `fetch` real do app. O CSS/estrutura visual foi renderizado separadamente; os contratos HTTP/read-only/result_kind/no-POST continuam validados pela suíte FastAPI/CI.
+
 ## Próxima fatia
 
-Expandir o leitor para **artefatos já persistidos** (seções e/ou síntese global) somente por GET. A UI não deve introduzir POST de análise/síntese nem custo remoto implícito. Manter transcript como base de evidência e distinguir `SECTIONS_ONLY` de `GLOBAL_SYNTHESIS`.
+Evitar que o leitor descubra indisponibilidade apenas por erro: expor/consumir **disponibilidade read-only de artefatos** para o job selecionado, incluindo seleções vindas da busca, e refletir isso nas abas sem disparar nenhum POST. Depois disso, a fronteira de T-008 estará pronta para decidir entre ampliar experiência local ou mover o foco para T-009 conforme bloqueios de T-006.
