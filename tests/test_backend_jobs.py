@@ -336,19 +336,19 @@ class APIIntegrationTests(unittest.TestCase):
         with TestClient(self.app(fake)) as client:
             old = body()
             old["video_id"] = "video-library"
-            old["segments"][0]["text"] = "LegacyNeedle only in old version"
+            old["segments"][0]["text"] = "LegacyNeedle old"
             old_id = client.post("/api/jobs", json=old).json()["id"]
             self.assertEqual(poll(client, old_id)["state"], "COMPLETED")
 
             latest = body()
             latest["video_id"] = "video-library"
-            latest["segments"][0]["text"] = "FreshNeedle in latest version"
+            latest["segments"][0]["text"] = "FreshNeedle latest"
             latest_id = client.post("/api/jobs", json=latest).json()["id"]
             self.assertEqual(poll(client, latest_id)["state"], "COMPLETED")
 
             other = body()
             other["video_id"] = "video-other"
-            other["segments"][0]["text"] = "freshneedle in another video"
+            other["segments"][0]["text"] = "freshneedle other"
             other_id = client.post("/api/jobs", json=other).json()["id"]
             self.assertEqual(poll(client, other_id)["state"], "COMPLETED")
             calls_before_reads = len(fake.calls)
