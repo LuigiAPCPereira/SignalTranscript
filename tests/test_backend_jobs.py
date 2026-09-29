@@ -330,6 +330,62 @@ class APIIntegrationTests(unittest.TestCase):
             self.assertEqual(client.get("/api/jobs", params={"limit": 0}).status_code, 422)
             self.assertEqual(client.get("/api/jobs", params={"before": 0}).status_code, 422)
 
+
+    def test_library_groups_versions_and_searches_latest_transcripts_without_ai(self):
+        fake = FakeProvider()
+        with TestClient(self.app(fake)) as client:
+            old = body()
+            old["video_id"] = "video-library"
+            old["segments"][0]["text"] = "LegacyNeedle only in old version"
+            old_id = client.post("/api/jobs", json=old).json()["id"]
+            self.assertEqual(poll(client, old_id)["state"], "COMPLETED")
+
+            latest = body()
+            latest["video_id"] = "video-library"
+            latest["segments"][0]["text"] = "FreshNeedle in latest version"
+            latest_id = client.post("/api/jobs", json=latest).json()["id"]
+            self.assertEqual(poll(client, latest_id)["state"], "COMPLETED")
+
+            other = body()
+            other["video_id"] = "video-other"
+            other["segments"][0]["text"] = "freshneedle in another video"
+            other_id = client.post("/api/jobs", json=other).json()["id"]
+            self.assertEqual(poll(client, other_id)["state"], "COMPLETED")
+            calls_before_reads = len(fake.calls)
+
+            library = client.get("/api/library")
+            self.assertEqual(library.status_code, 200, library.text)
+            payload = library.json()
+            self.assertEqual(payload["result_kind"], "LIBRARY")
+            self.assertEqual(
+                [item["video_id"] for item in payload["items"]],
+                ["video-other", "video-library"],
+            )
+            grouped = payload["items"][1]
+            self.assertEqual(grouped["latest_job_id"], latest_id)
+            self.assertEqual(grouped["version_count"], 2)
+            self.assertFalse(grouped["provenance"]["deep_links_allowed"])
+
+            missing_old = client.get("/api/library/search", params={"q": "LegacyNeedle"})
+            self.assertEqual(missing_old.status_code, 200)
+            self.assertEqual(missing_old.json()["items"], [])
+
+            search = client.get("/api/library/search", params={"q": "freshneedle"})
+            self.assertEqual(search.status_code, 200, search.text)
+            found = search.json()
+            self.assertEqual(found["result_kind"], "TRANSCRIPT_SEARCH")
+            self.assertFalse(found["truncated"])
+            self.assertEqual(
+                [item["video_id"] for item in found["items"]],
+                ["video-other", "video-library"],
+            )
+            self.assertEqual(found["items"][1]["job_id"], latest_id)
+            self.assertEqual(found["items"][1]["segment"]["id"], "s1")
+            self.assertFalse(found["items"][1]["provenance"]["deep_links_allowed"])
+
+            self.assertEqual(len(fake.calls), calls_before_reads)
+            self.assertEqual(client.get("/api/library/search", params={"q": " "}).status_code, 422)
+
     def test_caption_evidence_is_validated_and_persisted_without_enabling_links(self):
         fake = FakeProvider()
         with TestClient(self.app(fake)) as client:

@@ -30,6 +30,7 @@ from signaltranscript.backend.caption_evidence import (
 )
 from signaltranscript.backend.caption_import import MAX_BYTES
 from signaltranscript.backend.jobs import Job, JobConflict, SQLiteJobs, safe_code
+from signaltranscript.backend.library import LibraryEntry, LibraryReadModel, TranscriptSearchHit
 
 
 class SegmentInput(BaseModel):
@@ -64,6 +65,35 @@ def provenance_view(job: Job) -> dict[str, object]:
         "video_identity_status": evidence.video_identity_status if evidence is not None else "UNVERIFIED",
         "timeline_match_status": evidence.timeline_match_status if evidence is not None else "UNVERIFIED",
         "deep_links_allowed": False,
+    }
+
+
+
+def library_entry_view(jobs: SQLiteJobs, entry: LibraryEntry) -> dict[str, object]:
+    job = entry.latest_job
+    sections_present, synthesis_present = jobs.artifact_presence(job.id)
+    return {
+        "video_id": job.transcript.video_id,
+        "latest_job_id": job.id,
+        "version_count": entry.version_count,
+        "state": job.state,
+        "source": job.transcript.source,
+        "language": job.transcript.language,
+        "provenance": provenance_view(job),
+        "artifacts": {
+            "transcript_present": True,
+            "sections_present": sections_present,
+            "synthesis_present": synthesis_present,
+        },
+    }
+
+
+def search_hit_view(hit: TranscriptSearchHit) -> dict[str, object]:
+    return {
+        "video_id": hit.job.transcript.video_id,
+        "job_id": hit.job.id,
+        "segment": asdict(hit.segment),
+        "provenance": provenance_view(hit.job),
     }
 
 
@@ -121,6 +151,7 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
     elif any(not isinstance(value, str) or not value.strip() for value in synthesis_identity):
         raise ValueError("synthesis provider, model and revision are required")
     jobs = SQLiteJobs(Path(db_path))
+    library = LibraryReadModel(jobs)
     wake = asyncio.Event()
     synthesis_lock = asyncio.Lock()
 
@@ -227,6 +258,37 @@ def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_n
             raise HTTPException(status_code=422, detail=str(exc)[:100]) from None
         wake.set()
         return view(jobs, job)
+
+
+    @app.get("/api/library")
+    async def list_library(
+        limit: int = Query(default=20, ge=1, le=50),
+        before: int | None = Query(default=None, ge=1),
+    ):
+        """Latest persisted transcript version per video; read-only and provider-free."""
+        entries, next_before = library.list_entries(limit=limit, before=before)
+        return {
+            "result_kind": "LIBRARY",
+            "items": [library_entry_view(jobs, entry) for entry in entries],
+            "next_before": next_before,
+        }
+
+    @app.get("/api/library/search")
+    async def search_library(
+        q: str = Query(min_length=2, max_length=200),
+        limit: int = Query(default=20, ge=1, le=50),
+    ):
+        """Case-insensitive substring search over latest transcript versions only."""
+        try:
+            hits, truncated = library.search(q, limit=limit)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {
+            "result_kind": "TRANSCRIPT_SEARCH",
+            "query": q.strip(),
+            "items": [search_hit_view(hit) for hit in hits],
+            "truncated": truncated,
+        }
 
     @app.get("/api/jobs")
     async def list_jobs(
