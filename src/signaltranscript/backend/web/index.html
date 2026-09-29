@@ -44,8 +44,14 @@
           <div id="reader-meta" class="reader-meta" aria-label="Metadados da transcrição"></div>
         </header>
         <p id="reader-provenance" class="provenance-note"></p>
+        <nav class="reader-tabs" aria-label="Conteúdo persistido">
+          <button class="reader-tab" type="button" data-view="transcript" aria-pressed="true">Transcrição</button>
+          <button class="reader-tab" type="button" data-view="sections" aria-pressed="false">Seções</button>
+          <button class="reader-tab" type="button" data-view="synthesis" aria-pressed="false">Síntese global</button>
+        </nav>
         <div id="reader-status" class="status-line" role="status" aria-live="polite"></div>
         <ol id="reader-segments" class="segments" aria-label="Segmentos da transcrição"></ol>
+        <div id="reader-knowledge" class="knowledge" hidden></div>
       </article>
     </section>
   </main>
