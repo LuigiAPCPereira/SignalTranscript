@@ -45,3 +45,12 @@
 - `GET /api/library` agrupa versões persistidas por `video_id`, mantém o job mais recente como versão corrente e expõe `version_count`. `GET /api/library/search` faz busca substring case-insensitive apenas na versão corrente de cada vídeo e sinaliza `truncated` quando o limite é excedido.
 - A primeira revisão `a382c317` falhou no teste de integração porque o texto do fixture ultrapassou o orçamento deliberadamente reduzido usado para forçar seções. O fixture foi encurtado sem alterar limites de produção. `3367ee1db04ee1147f1794bc2d22a0d862c8177b` passou Actions 36574287374 em Python 3.12/3.13 com 246 testes.
 - Não há frontend, FTS, deep links, Groq real, merge ou deploy nesta fatia.
+
+
+## 2026-09-29 — T-008 primeiro frontend local
+
+- Após recuperar Frontend DNA, boundary de engenharia e dependências, foi escolhido um tracer sem dependências externas: HTML/CSS/ES modules servidos pelo próprio FastAPI. React/Vite foram avaliados como opções atuais, mas não adotados porque a primeira superfície não justificava build/lockfile/runtime adicional.
+- A UI consome somente `/api/library`, `/api/library/search` e `/api/jobs/{id}/transcript`; não possui POST de IA. Visual Thesis: Operate→Read, tom calmo/editorial, dois painéis no desktop, composição empilhada no mobile, sem título/thumbnail inventados e sem deep links enquanto a proveniência não permitir.
+- Commit inicial `ee2b7a22b458e85b15b53c2f382b32f60c52a91f` passou Actions 36581307388 em Python 3.12/3.13 com 248 testes.
+- Render em Chromium com bytes da revisão e fixtures de fetch encontrou defeito real: regra `.reader-empty {display:grid}` sobrepunha o atributo `hidden`. O guardrail `[hidden]{display:none!important}` e teste foram instalados; `682c08427191117cc2528530c5f4626f3bf5e7d8` passou Actions 36582197169 com 248 testes.
+- Render corrigido: desktop 1440×1000 (biblioteca, transcript, busca truncada) e mobile 390×844 (transcript), sem overflow horizontal. O Chromium do ambiente bloqueou localhost por política administrativa; portanto o render validou os assets/estados com fixtures, não E2E browser→FastAPI.
