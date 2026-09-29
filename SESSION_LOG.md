@@ -37,3 +37,11 @@
 - Adoption Gate v2 reaplicado em modo Aplicar por solicitação explícita do usuário. O SHA-256 do `DOCUMENTATION_AND_CONTINUITY.md` do Project (`7e64d070...39213`) e do `ENGINEERING_DNA.md` (`c19c5d97...a0e373`) coincidem exatamente com os hashes de origem registrados no manifesto central v2.2.
 - Corrigida a interpretação anterior que tratava o estado editorial Notion STAGING como bloqueio automático da adoção do projeto. O protocolo v2.2 separa distribuição/publicação central, adoção por projeto e operação integrada. A distribuição central segue STAGING; o Adoption Gate do SignalTranscript passa na ref de trabalho após reconciliação das nove funções.
 - A `main` continua não integrada; PR #10 permanece Draft. O loop agendado SignalTranscript foi observado desabilitado e não foi reativado nem alterado.
+
+
+## 2026-09-29 — T-008 biblioteca local e busca textual
+
+- T-008 iniciou com um `LibraryReadModel` derivado do journal para evitar duplicar transcripts em uma segunda fonte de verdade; FTS/materialização permanecem otimizações futuras dependentes de medição.
+- `GET /api/library` agrupa versões persistidas por `video_id`, mantém o job mais recente como versão corrente e expõe `version_count`. `GET /api/library/search` faz busca substring case-insensitive apenas na versão corrente de cada vídeo e sinaliza `truncated` quando o limite é excedido.
+- A primeira revisão `a382c317` falhou no teste de integração porque o texto do fixture ultrapassou o orçamento deliberadamente reduzido usado para forçar seções. O fixture foi encurtado sem alterar limites de produção. `3367ee1db04ee1147f1794bc2d22a0d862c8177b` passou Actions 36574287374 em Python 3.12/3.13 com 246 testes.
+- Não há frontend, FTS, deep links, Groq real, merge ou deploy nesta fatia.
