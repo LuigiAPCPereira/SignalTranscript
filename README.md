@@ -2,13 +2,13 @@
 
 Ferramenta **generalista** para transformar vídeos em conhecimento consultável sem exigir assistir a cada vídeo. Uma fonte válida (URL do YouTube quando acessível e permitida, transcrição importada ou áudio autorizado) deverá originar transcrição, síntese estruturada, referências à origem e biblioteca pessoal.
 
-**Estado real:** MVP v0.1 em implementação parcial na pilha de PRs *draft*. A branch do PR #10 já contém FastAPI/SQLite, jobs recuperáveis, análise longa por seções, síntese global explícita/checkpointada, adaptadores Groq STT/análise/síntese validados offline, importação SRT/WebVTT com proveniência e smoke com consentimento separado. **Groq autenticada, aquisição de vídeo/áudio real, frontend, E2E, merge e deploy não foram validados.** A `main` ainda não incorpora essas funcionalidades. Um resumo representa o que a fonte diz, sem verificação independente dos fatos.
+**Estado real:** MVP v0.1 em implementação parcial na pilha de PRs *draft*. A branch do PR #10 já contém FastAPI/SQLite, jobs recuperáveis, análise longa por seções, síntese global explícita/checkpointada, adaptadores Groq STT/análise/síntese validados offline, importação SRT/WebVTT com proveniência e smoke com consentimento separado. **Groq autenticada, aquisição de vídeo/áudio real, frontend completo/E2E, merge e deploy não foram validados.** A branch já possui um primeiro frontend read-only da biblioteca, validado por CI e render com fixtures; isso não equivale a E2E browser→FastAPI. A `main` ainda não incorpora essas funcionalidades. Um resumo representa o que a fonte diz, sem verificação independente dos fatos.
 
 ## Decisões e propostas
 
 - **Decidido pelo usuário:** produto generalista; backend Python + FastAPI; Groq como primeira opção de transcrição, mas nunca dependência obrigatória. Transcrição e análise têm portas separadas e provedores escolhidos explicitamente.
 - **Arquitetura parcialmente implementada:** SQLite para jobs e checkpoints, worker local, adaptadores Groq STT/análise testados offline. GPT-OSS 120B é o modelo registrado de análise Groq, sem execução remota autenticada. NVIDIA NIM/modelos locais não integrados.
-- **Propostas não concluídas:** React + TypeScript, yt-dlp/FFmpeg como adaptadores condicionados a aquisição permitida, biblioteca pesquisável, síntese global. Cotas específicas da conta e permissões sobre vídeos concretos não foram verificadas.
+- **Experiência:** biblioteca/search e um tracer frontend HTML/CSS/ES modules same-origin estão implementados. React/TypeScript não foi adotado nesta fase; continua opção futura caso a complexidade justifique a dependência. yt-dlp/FFmpeg condicionado a aquisição permitida permanece pendente. Cotas específicas da conta e permissões sobre vídeos concretos não foram verificadas.
 
 ## Documentação e execução
 
