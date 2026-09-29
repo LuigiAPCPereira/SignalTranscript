@@ -64,7 +64,7 @@ SQLite já é usado na branch para jobs, checkpoints de seções/síntese e meca
 
 **API de jobs implementada na branch:** `POST /api/jobs`, `GET /api/jobs` paginado, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/transcript`, `GET /api/jobs/{id}/sections`, `POST /api/jobs/{id}/resume`, `POST /api/jobs/{id}/cancel`, `POST /api/jobs/{id}/synthesis` e `GET /api/jobs/{id}/synthesis`. A listagem expõe metadados/proveniência e presença de artefatos, nunca inicia IA.
 
-**API de biblioteca ainda proposta:** entidade/listagem de vídeo/biblioteca, busca textual e análise por vídeo. A leitura de transcript por **job** já existe, mas isso não constitui uma biblioteca versionada por vídeo. Entrada binária precisa de contrato multipart separado. A futura UI deve usar polling moderado e não interpretar presença de artefato como validação de integridade.
+**Read model de biblioteca implementado na branch:** `GET /api/library` deriva uma entrada por `video_id` a partir do journal, mantendo `latest_job_id` e `version_count`; `GET /api/library/search` procura substring case-insensitive somente no transcript da versão mais recente. O journal continua sendo source of truth — não há tabela duplicada de biblioteca. A leitura de transcript por job permanece o artefato canônico. FTS/indexação, UI e análise por vídeo como experiência de biblioteca continuam pendentes. Entrada binária precisa de contrato multipart separado. A futura UI deve usar polling moderado e não interpretar presença de artefato como validação de integridade.
 
 ## Segurança e testes exigidos
 
