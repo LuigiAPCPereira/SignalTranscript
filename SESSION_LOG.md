@@ -28,3 +28,37 @@
 - Limites: nenhum SDK instalado na verificação, requisição real, CI, modelo local/NIM, chunking de vídeo longo, verificação de aderência semântica, persistência ou E2E. A análise inicial produz resumo sem referências próprias e ideias com referências de segmentos; isso não comprova a veracidade de qualquer alegação.
 
 **Checkpoint vinculado:** T-004 documental, T-010 técnico e T-003 parcial. Conferir [TASKLIST](TASKLIST.md), [PROJECT_STATE](PROJECT_STATE.md) e PRs/HEAD atuais antes de continuar. Nenhum merge/deploy foi realizado nesta fatia.
+
+
+## 2026-09-26 — Runtime de síntese recuperável e Adoption Gate v2
+
+- T-005/T-007: análise por seções e síntese global passaram a exigir consentimentos separados no smoke; adaptador Groq de síntese permanece função independente e opt-in. A síntese possui checkpoint SQLite e agora também leitura `GET /api/jobs/{id}/synthesis` que não chama IA nem cria a tabela quando nenhum resultado existe.
+- A primeira revisão do GET (`488e31df`) compilou, mas o CI falhou em um teste porque o mock não interceptava um default de função capturado no import. A injeção foi corrigida em `e6c159777f12c8f51a9ee085c07e5e1b062ba8a6`; Actions 36255131808 passou Python 3.12/3.13 com 234 testes.
+- Adoption Gate v2 reaplicado em modo Aplicar por solicitação explícita do usuário. O SHA-256 do `DOCUMENTATION_AND_CONTINUITY.md` do Project (`7e64d070...39213`) e do `ENGINEERING_DNA.md` (`c19c5d97...a0e373`) coincidem exatamente com os hashes de origem registrados no manifesto central v2.2.
+- Corrigida a interpretação anterior que tratava o estado editorial Notion STAGING como bloqueio automático da adoção do projeto. O protocolo v2.2 separa distribuição/publicação central, adoção por projeto e operação integrada. A distribuição central segue STAGING; o Adoption Gate do SignalTranscript passa na ref de trabalho após reconciliação das nove funções.
+- A `main` continua não integrada; PR #10 permanece Draft. O loop agendado SignalTranscript foi observado desabilitado e não foi reativado nem alterado.
+
+
+## 2026-09-29 — T-008 biblioteca local e busca textual
+
+- T-008 iniciou com um `LibraryReadModel` derivado do journal para evitar duplicar transcripts em uma segunda fonte de verdade; FTS/materialização permanecem otimizações futuras dependentes de medição.
+- `GET /api/library` agrupa versões persistidas por `video_id`, mantém o job mais recente como versão corrente e expõe `version_count`. `GET /api/library/search` faz busca substring case-insensitive apenas na versão corrente de cada vídeo e sinaliza `truncated` quando o limite é excedido.
+- A primeira revisão `a382c317` falhou no teste de integração porque o texto do fixture ultrapassou o orçamento deliberadamente reduzido usado para forçar seções. O fixture foi encurtado sem alterar limites de produção. `3367ee1db04ee1147f1794bc2d22a0d862c8177b` passou Actions 36574287374 em Python 3.12/3.13 com 246 testes.
+- Não há frontend, FTS, deep links, Groq real, merge ou deploy nesta fatia.
+
+
+## 2026-09-29 — T-008 primeiro frontend local
+
+- Após recuperar Frontend DNA, boundary de engenharia e dependências, foi escolhido um tracer sem dependências externas: HTML/CSS/ES modules servidos pelo próprio FastAPI. React/Vite foram avaliados como opções atuais, mas não adotados porque a primeira superfície não justificava build/lockfile/runtime adicional.
+- A UI consome somente `/api/library`, `/api/library/search` e `/api/jobs/{id}/transcript`; não possui POST de IA. Visual Thesis: Operate→Read, tom calmo/editorial, dois painéis no desktop, composição empilhada no mobile, sem título/thumbnail inventados e sem deep links enquanto a proveniência não permitir.
+- Commit inicial `ee2b7a22b458e85b15b53c2f382b32f60c52a91f` passou Actions 36581307388 em Python 3.12/3.13 com 248 testes.
+- Render em Chromium com bytes da revisão e fixtures de fetch encontrou defeito real: regra `.reader-empty {display:grid}` sobrepunha o atributo `hidden`. O guardrail `[hidden]{display:none!important}` e teste foram instalados; `682c08427191117cc2528530c5f4626f3bf5e7d8` passou Actions 36582197169 com 248 testes.
+- Render corrigido: desktop 1440×1000 (biblioteca, transcript, busca truncada) e mobile 390×844 (transcript), sem overflow horizontal. O Chromium do ambiente bloqueou localhost por política administrativa; portanto o render validou os assets/estados com fixtures, não E2E browser→FastAPI.
+
+
+## 2026-09-29 — T-008 leitor de seções e síntese persistidas
+
+- O primeiro frontend foi expandido sem adicionar endpoints de escrita: abas Transcrição, Seções e Síntese global usam apenas GET. O cliente exige `SECTIONS_ONLY` e `GLOBAL_SYNTHESIS` explicitamente e não contém `POST`.
+- Seções mostram resumos locais, ideias e referências, com aviso de que não são síntese global. A síntese mostra resumo global, ideias e cobertura de evidências, com aviso de que não é verificação factual independente. Síntese ausente (404) é estado normal e não dispara geração.
+- Commit funcional `a8225c6a393a24a4c96fd09ad1a6cfa8bc27b8c9` passou Actions 36609696964 em Python 3.12/3.13 com 248 testes.
+- Render representativo com CSS exato da revisão: seções desktop 1440×1000, síntese desktop 1440×1000 e síntese mobile 390×844; sem overflow horizontal. A política administrativa do Chromium bloqueia navegação local, então o render valida estrutura/CSS, não E2E browser→FastAPI.
