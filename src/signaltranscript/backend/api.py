@@ -127,12 +127,18 @@ def view(jobs: SQLiteJobs, job: Job) -> dict[str, object]:
     completed = jobs.completed_sections(job.id)
     if job.state == "COMPLETED" and completed != job.section_count:
         raise HTTPException(status_code=409, detail="INVALID_CHECKPOINT")
+    sections_present, synthesis_present = jobs.artifact_presence(job.id)
     return {"id": job.id, "video_id": job.transcript.video_id, "state": job.state,
             "provider": job.provider, "model": job.model, "attempts": job.attempts,
             "planned_sections": job.section_count,
             "completed_sections": completed, "error_code": job.error_code,
             "result_kind": "SECTIONS_ONLY" if job.state == "COMPLETED" else None,
-            "provenance": provenance_view(job)}
+            "provenance": provenance_view(job),
+            "artifacts": {
+                "transcript_present": True,
+                "sections_present": sections_present,
+                "synthesis_present": synthesis_present,
+            }}
 
 
 def create_app(db_path: Path, *, analysis_provider: AnalysisProvider, provider_name: str,
