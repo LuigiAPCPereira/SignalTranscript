@@ -1,5 +1,5 @@
 const ui={form:document.querySelector("#search-form"),input:document.querySelector("#search-input"),clear:document.querySelector("#clear-search"),list:document.querySelector("#library-list"),status:document.querySelector("#library-status"),loadMore:document.querySelector("#load-more"),readerEmpty:document.querySelector("#reader-empty"),reader:document.querySelector("#reader-content"),readerVideoId:document.querySelector("#reader-video-id"),readerMeta:document.querySelector("#reader-meta"),readerProvenance:document.querySelector("#reader-provenance"),readerStatus:document.querySelector("#reader-status"),segments:document.querySelector("#reader-segments"),knowledge:document.querySelector("#reader-knowledge"),tabs:[...document.querySelectorAll(".reader-tab")]};
-const state={nextBefore:null,selectedJobId:null,transcript:null,currentView:"transcript"};
+const state={nextBefore:null,selectedJobId:null,transcript:null,artifacts:null,currentView:"transcript"};
 
 function el(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node}
 function status(node,message,tone="neutral"){node.textContent=message;node.dataset.tone=tone}
@@ -16,6 +16,34 @@ function activateReaderView(view){
   for(const tab of ui.tabs)tab.setAttribute("aria-pressed",String(tab.dataset.view===view));
   ui.segments.hidden=view!=="transcript";
   ui.knowledge.hidden=view==="transcript";
+}
+
+function setArtifactAvailability(artifacts){
+  state.artifacts=artifacts;
+  for(const tab of ui.tabs){
+    const view=tab.dataset.view;
+    if(view==="transcript"){
+      tab.disabled=false;
+      tab.textContent="Transcrição";
+      tab.title="";
+      continue;
+    }
+    const key=view==="sections"?"sections_present":"synthesis_present";
+    const label=view==="sections"?"Seções":"Síntese global";
+    if(artifacts===null){
+      tab.disabled=true;
+      tab.textContent=`${label} — disponibilidade desconhecida`;
+      tab.title="A disponibilidade deste artefato não pôde ser verificada.";
+    }else if(artifacts[key]===true){
+      tab.disabled=false;
+      tab.textContent=label;
+      tab.title="";
+    }else{
+      tab.disabled=true;
+      tab.textContent=`${label} — indisponível`;
+      tab.title=`${label} não está persistida para este item.`;
+    }
+  }
 }
 
 function ideaList(ideas){
@@ -86,6 +114,17 @@ function renderSynthesis(data){
 
 async function openKnowledge(view){
   if(!state.selectedJobId)return;
+  const key=view==="sections"?"sections_present":"synthesis_present";
+  if(state.artifacts===null){
+    status(ui.readerStatus,"Disponibilidade de análises não verificada; reabra o item para tentar novamente.");
+    return;
+  }
+  if(state.artifacts[key]!==true){
+    status(ui.readerStatus,view==="sections"
+      ?"Não há análise por seções persistida para este item."
+      :"Não há síntese global persistida para este item.");
+    return;
+  }
   activateReaderView(view);
   ui.knowledge.replaceChildren();
   status(ui.readerStatus,view==="sections"?"Carregando análise por seções…":"Carregando síntese global…");
@@ -125,7 +164,7 @@ function loading(){ui.list.replaceChildren();const li=el("li");li.append(el("div
 async function loadLibrary({append=false}={}){ui.clear.hidden=true;if(!append){state.nextBefore=null;loading();status(ui.status,"Carregando biblioteca…")}try{const params=new URLSearchParams({limit:"20"});if(append&&state.nextBefore)params.set("before",String(state.nextBefore));const data=await requestJSON(`/api/library?${params}`);render(data.items||[],libraryButton,append);state.nextBefore=data.next_before??null;ui.loadMore.hidden=!state.nextBefore;if(!append&&(data.items||[]).length===0)status(ui.status,"Sua biblioteca está vazia. Importe uma transcrição para começar.");else status(ui.status,append?"Mais itens carregados.":`${(data.items||[]).length} itens visíveis.`)}catch{if(!append)ui.list.replaceChildren();ui.loadMore.hidden=true;status(ui.status,"Não foi possível carregar a biblioteca local.","error")}}
 async function search(query){state.nextBefore=null;ui.loadMore.hidden=true;ui.clear.hidden=false;loading();status(ui.status,"Buscando nas transcrições atuais…");try{const params=new URLSearchParams({q:query,limit:"20"}),data=await requestJSON(`/api/library/search?${params}`),items=data.items||[];render(items,searchButton);if(items.length===0)status(ui.status,`Nenhuma ocorrência para “${query}”.`);else if(data.truncated)status(ui.status,`${items.length} ocorrências exibidas. Há mais resultados; refine a busca.`);else status(ui.status,`${items.length} ${items.length===1?"ocorrência":"ocorrências"}.`)}catch{ui.list.replaceChildren();status(ui.status,"A busca local falhou. Tente novamente.","error")}}
 
-async function openTranscript(jobId){state.selectedJobId=jobId;state.transcript=null;activateReaderView("transcript");document.querySelectorAll(".entry-button").forEach(button=>markCurrent(button,button.dataset.jobId));ui.readerEmpty.hidden=true;ui.reader.hidden=false;ui.readerVideoId.textContent="Carregando…";ui.readerMeta.replaceChildren();ui.readerProvenance.textContent="";ui.segments.replaceChildren();ui.knowledge.replaceChildren();status(ui.readerStatus,"Carregando transcrição…");try{const data=await requestJSON(`/api/jobs/${encodeURIComponent(jobId)}/transcript`),transcript=data.transcript;state.transcript=transcript;ui.readerVideoId.textContent=transcript.video_id;ui.readerMeta.replaceChildren(el("span","pill",transcript.language||"idioma não informado"),el("span","pill",transcript.source),el("span","pill",`${transcript.segments.length} ${transcript.segments.length===1?"segmento":"segmentos"}`));ui.readerProvenance.textContent=provenanceText(data.provenance);const fragment=document.createDocumentFragment();for(const segment of transcript.segments){const li=el("li","segment");li.append(el("span","segment-time",range(segment)),el("p","segment-text",segment.text));fragment.append(li)}ui.segments.replaceChildren(fragment);status(ui.readerStatus,"Transcrição disponível localmente.")}catch{ui.readerVideoId.textContent="Transcrição indisponível";ui.segments.replaceChildren();status(ui.readerStatus,"Não foi possível abrir esta transcrição.","error")}}
+async function openTranscript(jobId){state.selectedJobId=jobId;state.transcript=null;setArtifactAvailability(null);activateReaderView("transcript");document.querySelectorAll(".entry-button").forEach(button=>markCurrent(button,button.dataset.jobId));ui.readerEmpty.hidden=true;ui.reader.hidden=false;ui.readerVideoId.textContent="Carregando…";ui.readerMeta.replaceChildren();ui.readerProvenance.textContent="";ui.segments.replaceChildren();ui.knowledge.replaceChildren();status(ui.readerStatus,"Carregando transcrição…");try{const encoded=encodeURIComponent(jobId),data=await requestJSON(`/api/jobs/${encoded}/transcript`),transcript=data.transcript;state.transcript=transcript;ui.readerVideoId.textContent=transcript.video_id;ui.readerMeta.replaceChildren(el("span","pill",transcript.language||"idioma não informado"),el("span","pill",transcript.source),el("span","pill",`${transcript.segments.length} ${transcript.segments.length===1?"segmento":"segmentos"}`));ui.readerProvenance.textContent=provenanceText(data.provenance);const fragment=document.createDocumentFragment();for(const segment of transcript.segments){const li=el("li","segment");li.append(el("span","segment-time",range(segment)),el("p","segment-text",segment.text));fragment.append(li)}ui.segments.replaceChildren(fragment);status(ui.readerStatus,"Transcrição disponível localmente. Conferindo artefatos…");try{const job=await requestJSON(`/api/jobs/${encoded}`),artifacts=job.artifacts||null;setArtifactAvailability(artifacts);if(artifacts){ui.readerMeta.append(pill("Seções",artifacts.sections_present===true),pill("Síntese",artifacts.synthesis_present===true));status(ui.readerStatus,"Transcrição disponível localmente.");}else{status(ui.readerStatus,"Transcrição disponível; disponibilidade de análises não informada.");}}catch{setArtifactAvailability(null);status(ui.readerStatus,"Transcrição disponível; disponibilidade de análises não pôde ser verificada.");}}catch{ui.readerVideoId.textContent="Transcrição indisponível";ui.segments.replaceChildren();setArtifactAvailability(null);status(ui.readerStatus,"Não foi possível abrir esta transcrição.","error")}}
 
 ui.form.addEventListener("submit",event=>{event.preventDefault();const query=ui.input.value.trim();if(query.length<2){status(ui.status,"Digite pelo menos 2 caracteres para buscar.","error");ui.input.focus();return}search(query)});
 ui.clear.addEventListener("click",()=>{ui.input.value="";loadLibrary();ui.input.focus()});
